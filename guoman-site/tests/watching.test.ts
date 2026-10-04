@@ -24,8 +24,8 @@ const anime = (id: string, episodes = "更新至12话"): Anime => ({
 });
 const follow = (seriesId: string, watchedEpisode = 0) => ({
   seriesId,
-  watchedEpisode,
-  positionSeconds: 0,
+  currentEpisode: watchedEpisode,
+  episodeCompleted: watchedEpisode > 0,
   paused: false,
   version: 1,
   updatedAt: new Date(now).toISOString(),
@@ -93,7 +93,10 @@ test("通用观看队列区分未看、已追平、暂停和待核验", () => {
 test("续看优先；过期排期不假定已经上线", () => {
   const result = watchingQueue(
     [anime("a"), { ...anime("b"), checkedAt: "2026-08-01T00:00:00Z" }],
-    [follow("a"), { ...follow("b"), positionSeconds: 120 }],
+    [
+      follow("a"),
+      { ...follow("b"), currentEpisode: 1, episodeCompleted: false },
+    ],
     now,
   );
   assert.equal(result.ready[0].series.id, "b");
@@ -129,23 +132,23 @@ test("本机演示记录打开但不完成；进度与追番可持久化和移�
   const state = await local.call("follow", { seriesId: "a" });
   await local.call("open", { seriesId: "a" });
   let library = await local.call("library", {});
-  assert.equal(library.follows[0].watchedEpisode, 0);
+  assert.equal(library.follows[0].currentEpisode, 0);
   assert.ok(library.follows[0].lastOpenedAt);
   await local.call("progress", {
     seriesId: "a",
-    watchedEpisode: 3,
-    positionSeconds: 90,
+    currentEpisode: 3,
+    episodeCompleted: false,
     paused: false,
     version: state.version,
   });
   library = await createLocalLibrary(storage, [anime("a")]).call("library", {});
-  assert.equal(library.follows[0].watchedEpisode, 3);
+  assert.equal(library.follows[0].currentEpisode, 3);
   await assert.rejects(
     () =>
       local.call("progress", {
         seriesId: "a",
-        watchedEpisode: 4,
-        positionSeconds: 0,
+        currentEpisode: 4,
+        episodeCompleted: true,
         paused: false,
         version: state.version,
       }),
@@ -208,4 +211,94 @@ test("日历新增节目可以追番，未经服务器核验的集数不直接�
   assert.equal(library.follows.length, 1);
   assert.equal(library.series[0].monitoring, "queued");
   assert.equal(latestPublishedEpisode(library.series[0], now), null);
+});
+
+test("最新一集未看完仍可续看，标为看完后才追平", () => {
+  const state = { ...follow("a", 12), episodeCompleted: false };
+  const unfinished = watchingQueue([anime("a")], [state], now);
+  assert.equal(unfinished.ready[0].nextEpisode, 12);
+  assert.equal(unfinished.ready[0].unwatched, 1);
+  assert.equal(unfinished.caughtUp.length, 0);
+  const completed = watchingQueue(
+    [anime("a")],
+    [{ ...state, episodeCompleted: true }],
+    now,
+  );
+  assert.equal(completed.ready.length, 0);
+  assert.equal(completed.caughtUp[0].nextEpisode, 13);
+});
+
+test("本机旧秒数记录转成下一集未看完；保存后仅保留集数状态", async () => {
+  let saved = JSON.stringify({
+    user: { uid: "local-demo", displayName: "本机演示" },
+    series: [anime("a")],
+    follows: [
+      {
+        seriesId: "a",
+        watchedEpisode: 3,
+        positionSeconds: 90,
+        paused: false,
+        version: 1,
+        updatedAt: new Date(now).toISOString(),
+      },
+    ],
+  });
+  const storage = {
+    getItem: () => saved,
+    setItem: (_key: string, value: string) => {
+      saved = value;
+    },
+  };
+  const local = createLocalLibrary(storage, []);
+  const state = (await local.call("library", {})).follows[0];
+  assert.equal(state.currentEpisode, 4);
+  assert.equal(state.episodeCompleted, false);
+  await local.call("progress", {
+    seriesId: "a",
+    currentEpisode: 4,
+    episodeCompleted: true,
+    paused: false,
+    version: 1,
+  });
+  const persisted = JSON.parse(saved).follows[0];
+  assert.equal(persisted.currentEpisode, 4);
+  assert.equal(persisted.episodeCompleted, true);
+  assert.equal("positionSeconds" in persisted, false);
+  assert.equal("watchedEpisode" in persisted, false);
+});
+
+test("本机拒绝零集已看完、无效完成状态和超出已发布的集数", async () => {
+  let saved: string | null = null;
+  const local = createLocalLibrary(
+    {
+      getItem: () => saved,
+      setItem: (_key: string, value: string) => {
+        saved = value;
+      },
+    },
+    [anime("a")],
+  );
+  await local.call("follow", { seriesId: "a" });
+  const payload = {
+    seriesId: "a",
+    currentEpisode: 1,
+    episodeCompleted: false,
+    paused: false,
+    version: 1,
+  };
+  for (const patch of [
+    { currentEpisode: 0, episodeCompleted: true },
+    { currentEpisode: 13 },
+    { episodeCompleted: "yes" },
+    { currentEpisode: 1.5 },
+  ]) {
+    await assert.rejects(() =>
+      local.call("progress", { ...payload, ...patch }),
+    );
+  }
+  await local.call("progress", payload);
+  assert.equal(
+    (await local.call("library", {})).follows[0].episodeCompleted,
+    false,
+  );
 });

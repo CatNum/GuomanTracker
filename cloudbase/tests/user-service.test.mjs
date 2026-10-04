@@ -46,8 +46,8 @@ test('anonymous and forged payload uid cannot read or mutate another account', a
   await call('alice', 'follow', { seriesId: 'bili-seed' });
   const library = await call('bob', 'library', { uid: 'alice' });
   assert.deepEqual(library.data.follows, []);
-  assert.equal((await call('bob', 'progress', { seriesId: 'bili-seed', watchedEpisode: 4, positionSeconds: 0, paused: false, version: 1, uid: 'alice' })).error.code, 'NOT_FOLLOWING');
-  assert.equal((await call('alice', 'library')).data.follows[0].watchedEpisode, 0);
+  assert.equal((await call('bob', 'progress', { seriesId: 'bili-seed', currentEpisode: 4, episodeCompleted: false, paused: false, version: 1, uid: 'alice' })).error.code, 'NOT_FOLLOWING');
+  assert.equal((await call('alice', 'library')).data.follows[0].currentEpisode, 0);
 });
 
 test('known official links preserve catalog identifiers and repeated submissions deduplicate', async () => {
@@ -75,18 +75,18 @@ test('daily submission limit is atomic, excludes duplicates and resets in China 
   assert.equal((await call('alice', 'submit', { title: '第二天', url: 'https://www.bilibili.com/bangumi/play/ss9999' })).ok, true);
 });
 
-test('progress prevents stale overwrites and invalid episode/position values', async () => {
+test('progress prevents stale overwrites and invalid episode/completion values', async () => {
   const { call } = setup();
   await call('alice', 'follow', { seriesId: 'bili-seed' });
-  const payload = { seriesId: 'bili-seed', watchedEpisode: 3, positionSeconds: 80, paused: false, version: 1 };
-  const results = await Promise.all([call('alice', 'progress', payload), call('alice', 'progress', { ...payload, watchedEpisode: 5 })]);
+  const payload = { seriesId: 'bili-seed', currentEpisode: 3, episodeCompleted: false, paused: false, version: 1 };
+  const results = await Promise.all([call('alice', 'progress', payload), call('alice', 'progress', { ...payload, currentEpisode: 5 })]);
   assert.equal(results.filter((result) => result.ok).length, 1);
   assert.equal(results.filter((result) => result.error?.code === 'CONFLICT').length, 1);
-  for (const patch of [{ watchedEpisode: 11 }, { watchedEpisode: -1 }, { watchedEpisode: 1.5 }, { positionSeconds: -1 }, { positionSeconds: 90000 }, { paused: 'no' }, { version: undefined }]) {
+  for (const patch of [{ currentEpisode: 11 }, { currentEpisode: -1 }, { currentEpisode: 1.5 }, { episodeCompleted: undefined }, { episodeCompleted: "yes" }, { currentEpisode: 0, episodeCompleted: true }, { paused: 'no' }, { version: undefined }]) {
     assert.equal((await call('alice', 'progress', { ...payload, version: 2, ...patch })).error.code, 'INVALID_PROGRESS');
   }
-  const corrected = await call('alice', 'progress', { ...payload, watchedEpisode: 1, positionSeconds: 0, version: 2 });
-  assert.equal(corrected.data.watchedEpisode, 1);
+  const corrected = await call('alice', 'progress', { ...payload, currentEpisode: 1, episodeCompleted: false, version: 2 });
+  assert.equal(corrected.data.currentEpisode, 1);
   assert.equal(corrected.data.version, 3);
 });
 
@@ -102,10 +102,10 @@ test('daily quota resets at Shanghai midnight rather than UTC midnight', async (
 test('opening official playback updates timestamp without counting a completed episode', async () => {
   const { call } = setup();
   await call('alice', 'follow', { seriesId: 'bili-seed' });
-  await call('alice', 'progress', { seriesId: 'bili-seed', watchedEpisode: 4, positionSeconds: 42, paused: false, version: 1 });
+  await call('alice', 'progress', { seriesId: 'bili-seed', currentEpisode: 4, episodeCompleted: false, paused: false, version: 1 });
   const opened = await call('alice', 'open', { seriesId: 'bili-seed' });
-  assert.equal(opened.data.watchedEpisode, 4);
-  assert.equal(opened.data.positionSeconds, 42);
+  assert.equal(opened.data.currentEpisode, 4);
+  assert.equal(opened.data.episodeCompleted, false);
   assert.ok(opened.data.lastOpenedAt);
   assert.equal((await call('alice', 'open', { seriesId: 'bili-seed' })).data.version, 2);
   assert.equal((await call('bob', 'unfollow', { seriesId: 'bili-seed' })).ok, true);
@@ -218,9 +218,9 @@ test('progress uses actual published episodes rather than totals, schedules, or 
     const service = createUserService({ store: new MemoryStore(), seed: [{ ...seed[0], ...fixture }], now: () => new Date(now) });
     const call = (action, payload) => service({ action, payload }, { uid: 'alice' });
     await call('follow', { seriesId: 'bili-seed' });
-    const progress = { seriesId: 'bili-seed', watchedEpisode: fixture.maximum + 1, positionSeconds: 0, paused: false, version: 1 };
+    const progress = { seriesId: 'bili-seed', currentEpisode: fixture.maximum + 1, episodeCompleted: false, paused: false, version: 1 };
     assert.equal((await call('progress', progress)).error?.code, 'INVALID_PROGRESS');
-    assert.equal((await call('progress', { ...progress, watchedEpisode: fixture.maximum })).ok, true);
+    assert.equal((await call('progress', { ...progress, currentEpisode: fixture.maximum })).ok, true);
   }
 });
 
@@ -234,4 +234,36 @@ test('planned updates and totals are unknown until a confirmed release exists', 
   }
   assert.equal(latestPublishedEpisode({ ...seed[0], episodes: '全24集', latestEpisode: undefined, status: 'finished' }, now), 24);
   assert.equal(latestPublishedEpisode({ ...seed[0], episodes: '预计更新至13集', latestEpisode: 12 }, now), 12);
+});
+
+
+test('episode completion changes the state without requiring playback seconds', async () => {
+  const { call } = setup();
+  await call('alice', 'follow', { seriesId: 'bili-seed' });
+  const started = await call('alice', 'progress', { seriesId: 'bili-seed', currentEpisode: 10, episodeCompleted: false, paused: false, version: 1 });
+  assert.equal(started.ok, true);
+  assert.equal(started.data.currentEpisode, 10);
+  assert.equal(started.data.episodeCompleted, false);
+  const completed = await call('alice', 'progress', { seriesId: 'bili-seed', currentEpisode: 10, episodeCompleted: true, paused: false, version: 2 });
+  assert.equal(completed.ok, true);
+  assert.equal(completed.data.episodeCompleted, true);
+  assert.equal('positionSeconds' in completed.data, false);
+});
+
+test('legacy cloud records retain completed counts and convert partial seconds on read and write', async () => {
+  const { call, store } = setup();
+  await call('alice', 'follow', { seriesId: 'bili-seed' });
+  const [key, follow] = [...store.maps.entries()].find(([, value]) => value.kind === 'follow');
+  const { currentEpisode, episodeCompleted, ...base } = follow;
+  store.maps.set(key, { ...base, watchedEpisode: 3, positionSeconds: 90 });
+  let state = (await call('alice', 'library')).data.follows[0];
+  assert.equal(state.currentEpisode, 4);
+  assert.equal(state.episodeCompleted, false);
+  assert.equal('positionSeconds' in state, false);
+  await call('alice', 'open', { seriesId: 'bili-seed' });
+  assert.equal('positionSeconds' in store.maps.get(key), false);
+  store.maps.set(key, { ...base, watchedEpisode: 3, positionSeconds: 0 });
+  state = (await call('alice', 'library')).data.follows[0];
+  assert.equal(state.currentEpisode, 3);
+  assert.equal(state.episodeCompleted, true);
 });

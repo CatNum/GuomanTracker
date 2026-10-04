@@ -1,11 +1,12 @@
 import type { Anime } from "./catalog.ts";
 import { latestPublishedEpisode } from "../../cloudbase/shared/published-episode.mjs";
+import { completedEpisodeCount } from "../../cloudbase/shared/episode-progress.mjs";
 export { latestPublishedEpisode };
 
 export type WatchState = {
   seriesId: string;
-  watchedEpisode: number;
-  positionSeconds: number;
+  currentEpisode: number;
+  episodeCompleted: boolean;
   paused: boolean;
   updatedAt: string;
   lastOpenedAt?: string;
@@ -48,10 +49,14 @@ export function watchingQueue(
       series: item,
       follow,
       latestEpisode,
-      nextEpisode: follow.watchedEpisode + 1,
+      nextEpisode: Math.max(
+        1,
+        follow.currentEpisode + Number(follow.episodeCompleted),
+      ),
       unwatched: Math.max(
         0,
-        (latestEpisode ?? follow.watchedEpisode) - follow.watchedEpisode,
+        (latestEpisode ?? completedEpisodeCount(follow)) -
+          completedEpisodeCount(follow),
       ),
       stale: now - Date.parse(item.lastScanAt || item.checkedAt) > 2 * 86400000,
     };
@@ -61,8 +66,8 @@ export function watchingQueue(
   }
   ready.sort(
     (a, b) =>
-      Number(b.follow.positionSeconds > 0) -
-        Number(a.follow.positionSeconds > 0) ||
+      Number(b.follow.currentEpisode > 0 && !b.follow.episodeCompleted) -
+        Number(a.follow.currentEpisode > 0 && !a.follow.episodeCompleted) ||
       Date.parse(b.series.lastScanAt || b.series.checkedAt) -
         Date.parse(a.series.lastScanAt || a.series.checkedAt) ||
       a.series.title.localeCompare(b.series.title, "zh-CN"),

@@ -206,13 +206,21 @@ export default function Tracker({
   }
   async function complete(series: Anime, follow: WatchState) {
     const latest = latestPublishedEpisode(series, now);
-    if (latest === null || follow.watchedEpisode >= latest) return;
+    if (
+      latest === null ||
+      Math.max(1, follow.currentEpisode + Number(follow.episodeCompleted)) >
+        latest
+    )
+      return;
     await perform(
       "progress",
       {
         seriesId: series.id,
-        watchedEpisode: follow.watchedEpisode + 1,
-        positionSeconds: 0,
+        currentEpisode: Math.max(
+          1,
+          follow.currentEpisode + Number(follow.episodeCompleted),
+        ),
+        episodeCompleted: true,
         paused: follow.paused,
         version: follow.version,
       },
@@ -438,15 +446,15 @@ export default function Tracker({
                               </div>
                               <div className="featured-body">
                                 <span className="small-label">
-                                  {queue.ready[0].follow.positionSeconds
+                                  {!queue.ready[0].follow.episodeCompleted &&
+                                  queue.ready[0].follow.currentEpisode > 0
                                     ? "接着上次的故事"
                                     : "有未看内容"}
                                 </span>
                                 <h2>{queue.ready[0].series.title}</h2>
                                 <p>
-                                  看到第 {queue.ready[0].follow.watchedEpisode}{" "}
-                                  集 · 已核验至第 {queue.ready[0].latestEpisode}{" "}
-                                  集
+                                  {progressLabel(queue.ready[0].follow)} ·
+                                  已核验至第 {queue.ready[0].latestEpisode} 集
                                 </p>
                                 <div className="next-episode">
                                   从第 <b>{queue.ready[0].nextEpisode}</b>{" "}
@@ -455,15 +463,6 @@ export default function Tracker({
                                     还有 {queue.ready[0].unwatched} 集未看
                                   </span>
                                 </div>
-                                {queue.ready[0].follow.positionSeconds > 0 && (
-                                  <p>
-                                    续看位置{" "}
-                                    {formatPosition(
-                                      queue.ready[0].follow.positionSeconds,
-                                    )}
-                                    （到官方平台手动定位）
-                                  </p>
-                                )}
                                 <PlaybackActions
                                   candidate={queue.ready[0]}
                                   busy={busy}
@@ -543,7 +542,7 @@ export default function Tracker({
                               >
                                 <Check size={16} />
                                 {series.title}
-                                <small>看到第 {follow.watchedEpisode} 集</small>
+                                <small>{progressLabel(follow)}</small>
                               </button>
                             ))}
                           </section>
@@ -595,8 +594,8 @@ export default function Tracker({
                                       {follow.paused && <small>已暂停</small>}
                                     </h2>
                                     <p>
-                                      {platforms[series.platform]?.name} · 已看{" "}
-                                      {follow.watchedEpisode} 集 ·{" "}
+                                      {platforms[series.platform]?.name} ·{" "}
+                                      {progressLabel(follow)} ·{" "}
                                       {latest !== null
                                         ? `已核验至 ${latest} 集`
                                         : "最新集数待核验"}
@@ -719,8 +718,9 @@ export default function Tracker({
   );
 }
 
-function formatPosition(seconds: number) {
-  return `${Math.floor(seconds / 60)}分${seconds % 60}秒`;
+function progressLabel(follow: WatchState) {
+  if (follow.currentEpisode === 0) return "还没开始";
+  return `第 ${follow.currentEpisode} 集 · ${follow.episodeCompleted ? "已看完" : "未看完"}`;
 }
 function Verification({ series, stale }: { series: Anime; stale: boolean }) {
   const unverified =
@@ -771,7 +771,11 @@ function PlaybackActions({
         onClick={() => onOpen(candidate.series)}
       >
         <Play size={15} fill="currentColor" />
-        前往官方{candidate.follow.positionSeconds ? "续看" : "观看"}
+        前往官方
+        {candidate.follow.currentEpisode > 0 &&
+        !candidate.follow.episodeCompleted
+          ? "续看"
+          : "观看"}
         <ExternalLink size={14} />
       </a>
       {candidate.unwatched > 0 && (
@@ -812,11 +816,9 @@ function WatchCard(props: PlaybackProps) {
       </div>
       <h3>{candidate.series.title}</h3>
       <p>
-        已看 {candidate.follow.watchedEpisode} 集
+        {progressLabel(candidate.follow)}
         {candidate.latestEpisode !== null &&
           ` · 最新 ${candidate.latestEpisode} 集`}
-        {candidate.follow.positionSeconds > 0 &&
-          ` · 续看 ${formatPosition(candidate.follow.positionSeconds)}`}
       </p>
       <PlaybackActions {...props} />
       <Verification series={candidate.series} stale={candidate.stale} />
@@ -980,18 +982,26 @@ function ProgressDialog({
   error: string;
   onClose: () => void;
   onSave: (values: {
-    watchedEpisode: number;
-    positionSeconds: number;
+    currentEpisode: number;
+    episodeCompleted: boolean;
     paused: boolean;
   }) => Promise<void>;
 }) {
-  const [watched, setWatched] = useState(String(follow.watchedEpisode)),
-    [minutes, setMinutes] = useState(
-      String(Math.floor(follow.positionSeconds / 60)),
-    ),
-    [seconds, setSeconds] = useState(String(follow.positionSeconds % 60)),
-    [paused, setPaused] = useState(follow.paused);
+  const [episode, setEpisode] = useState(String(follow.currentEpisode));
+  const [completed, setCompleted] = useState(follow.episodeCompleted);
+  const [paused, setPaused] = useState(follow.paused);
   const latest = latestPublishedEpisode(series);
+  const maximum = latest ?? 10000;
+  const numericEpisode = Number(episode);
+  const validEpisode =
+    episode.trim() !== "" &&
+    Number.isInteger(numericEpisode) &&
+    numericEpisode >= 0 &&
+    numericEpisode <= maximum;
+  function changeEpisode(value: string) {
+    setEpisode(value);
+    if (Number(value) === 0) setCompleted(false);
+  }
   return (
     <DialogFrame title="更新观看进度" onClose={onClose}>
       <p className="dialog-description">{series.title}</p>
@@ -999,60 +1009,60 @@ function ProgressDialog({
         onSubmit={(e) => {
           e.preventDefault();
           void onSave({
-            watchedEpisode: Number(watched),
-            positionSeconds: Number(minutes) * 60 + Number(seconds),
+            currentEpisode: numericEpisode,
+            episodeCompleted: completed,
             paused,
           });
         }}
       >
-        <label>
-          最后完整看完的集数
+        <label htmlFor="progress-episode">看到第几集</label>
+        <div className="episode-stepper">
+          <button
+            type="button"
+            aria-label="减少一集"
+            disabled={busy || !validEpisode || numericEpisode <= 0}
+            onClick={() => changeEpisode(String(numericEpisode - 1))}
+          >
+            −
+          </button>
           <input
+            id="progress-episode"
             autoFocus
             type="number"
+            inputMode="numeric"
             required
             min={0}
-            max={latest ?? 10000}
+            max={maximum}
             step={1}
-            value={watched}
-            onChange={(e) => setWatched(e.target.value)}
+            value={episode}
+            disabled={busy}
+            onChange={(e) => changeEpisode(e.target.value)}
           />
-        </label>
+          <button
+            type="button"
+            aria-label="增加一集"
+            disabled={busy || !validEpisode || numericEpisode >= maximum}
+            onClick={() => changeEpisode(String(numericEpisode + 1))}
+          >
+            +
+          </button>
+        </div>
         <p className="field-note">
-          0 表示还没看。
+          0 表示还没开始，每次加减一集。
           {latest !== null
             ? `官网最近核验至第 ${latest} 集。`
             : "最新集数待核验，可先记录自己的进度。"}
         </p>
-        <fieldset>
-          <legend>下一集的续看位置（可选）</legend>
-          <div className="position-input">
-            <label>
-              分钟
-              <input
-                type="number"
-                required
-                min={0}
-                max={1440}
-                step={1}
-                value={minutes}
-                onChange={(e) => setMinutes(e.target.value)}
-              />
-            </label>
-            <label>
-              秒
-              <input
-                type="number"
-                required
-                min={0}
-                max={59}
-                step={1}
-                value={seconds}
-                onChange={(e) => setSeconds(e.target.value)}
-              />
-            </label>
-          </div>
-        </fieldset>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={completed}
+            disabled={busy || !validEpisode || numericEpisode === 0}
+            onChange={(e) => setCompleted(e.target.checked)}
+          />
+          这一集已看完
+        </label>
+        <p className="field-note">未勾选时推荐继续这一集，勾选后推荐下一集。</p>
         <label className="checkbox-label">
           <input
             type="checkbox"
@@ -1063,7 +1073,7 @@ function ProgressDialog({
           暂停追番（暂时不参与观看推荐）
         </label>
         <p className="field-note">
-          官方平台暂未同步观看记录；这里由你确认，续看位置需到官方播放器手动定位。
+          官方平台暂未同步观看记录；集数与是否看完由你确认。
         </p>
         {error && (
           <p role="alert" className="form-error">

@@ -5,6 +5,10 @@ import {
   type WatchState,
 } from "./watching.ts";
 import { parseOfficialUrl } from "../../cloudbase/shared/official-url.mjs";
+import {
+  normalizeEpisodeProgress,
+  validEpisodeProgress,
+} from "../../cloudbase/shared/episode-progress.mjs";
 
 const key = "guoman-device-library-v2";
 type StoragePort = {
@@ -17,7 +21,7 @@ export function createLocalLibrary(storage: StoragePort, catalog: Anime[]) {
     try {
       const data = JSON.parse(storage.getItem(key) || "null");
       if (data && Array.isArray(data.series) && Array.isArray(data.follows))
-        return data;
+        return { ...data, follows: data.follows.map(normalizeEpisodeProgress) };
     } catch {}
     return {
       user: { uid: "local-demo", displayName: "本机演示" },
@@ -43,8 +47,8 @@ export function createLocalLibrary(storage: StoragePort, catalog: Anime[]) {
         if (!state) {
           state = {
             seriesId,
-            watchedEpisode: 0,
-            positionSeconds: 0,
+            currentEpisode: 0,
+            episodeCompleted: false,
             paused: false,
             updatedAt: now,
             version: 1,
@@ -80,8 +84,8 @@ export function createLocalLibrary(storage: StoragePort, catalog: Anime[]) {
           (x) => x.seriesId === series!.id,
         ) || {
           seriesId: series.id,
-          watchedEpisode: 0,
-          positionSeconds: 0,
+          currentEpisode: 0,
+          episodeCompleted: false,
           paused: false,
           updatedAt: now,
           version: 1,
@@ -103,25 +107,18 @@ export function createLocalLibrary(storage: StoragePort, catalog: Anime[]) {
         } else {
           if (payload.version !== state.version)
             throw new Error("观看记录版本已变化，请刷新后重试");
-          const watched = Number(payload.watchedEpisode),
-            seconds = Number(payload.positionSeconds);
+          const episode = payload.currentEpisode;
           const latest = latestPublishedEpisode(
             library.series.find((x) => x.id === seriesId)!,
           );
           if (
-            !Number.isInteger(watched) ||
-            watched < 0 ||
-            watched > 10000 ||
-            (latest !== null && watched > latest) ||
-            !Number.isInteger(seconds) ||
-            seconds < 0 ||
-            seconds > 86400 ||
+            !validEpisodeProgress(episode, payload.episodeCompleted, latest) ||
             typeof payload.paused !== "boolean"
           )
-            throw new Error("请检查已看集数和续看时间");
+            throw new Error("请检查集数和是否看完；0 集表示尚未开始");
           Object.assign(state, {
-            watchedEpisode: watched,
-            positionSeconds: seconds,
+            currentEpisode: episode,
+            episodeCompleted: payload.episodeCompleted,
             paused: payload.paused,
             updatedAt: now,
             version: state.version + 1,

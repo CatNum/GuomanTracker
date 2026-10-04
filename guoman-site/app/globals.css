@@ -98,8 +98,11 @@
 .workspace-dialog form>.primary-action { width:100%; margin-top:12px; }
 .workspace-dialog fieldset { margin:19px 0; padding:0; border:0; }
 .workspace-dialog legend { font-size:14px; margin-bottom:10px; }
-.position-input { display:flex; gap:15px; font-size:13px; }
-.position-input label { flex:1; }
+.episode-stepper { display:flex; align-items:center; gap:12px; }
+.episode-stepper button { flex:0 0 44px; height:44px; border:1px solid #4d6340; border-radius:6px; background:#293720; color:#d6edb9; font-size:24px; cursor:pointer; }
+.episode-stepper button:disabled { opacity:.4; cursor:not-allowed; }
+.workspace-dialog .episode-stepper input { margin-top:0; min-width:0; text-align:center; }
+.episode-stepper button:focus-visible { outline:2px solid #b5e363; outline-offset:2px; }
 .workspace-dialog form>label.checkbox-label { display:flex; align-items:center; gap:9px; font-size:13px; }
 .checkbox-label input { accent-color:#c5f56b; }
 .auth-result { max-width:700px; margin:12vh auto; padding:30px; }

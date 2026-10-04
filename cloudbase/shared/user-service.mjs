@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { normalizeOfficialUrl } from './official-links.mjs';
 import { latestPublishedEpisode } from './published-episode.mjs';
+import { normalizeEpisodeProgress, validEpisodeProgress } from './episode-progress.mjs';
 
 export const COLLECTIONS = Object.freeze({ series: 'guoman_series', watch: 'guoman_watch_state', targets: 'guoman_monitor_targets' });
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -13,7 +14,7 @@ class UserError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 const reject = (code, message) => { throw new UserError(code, message); };
-const cleanFollow = ({ owner, kind, _id, ...follow }) => follow;
+const cleanFollow = ({ owner, kind, _id, ...follow }) => normalizeEpisodeProgress(follow);
 const cleanSeries = ({ _id, submittedBy, ...series }) => series;
 
 /** Creates the authenticated domain service. Identity is supplied by the trusted cloud-function entry, never by event data. */
@@ -27,7 +28,7 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
     return await boundary.get(COLLECTIONS.series, id) ?? seedsById.get(id) ?? null;
   }
   function newFollow(uid, seriesId, at) {
-    return { owner: uid, kind: 'follow', seriesId, watchedEpisode: 0, positionSeconds: 0, paused: false, updatedAt: at, version: 1 };
+    return { owner: uid, kind: 'follow', seriesId, currentEpisode: 0, episodeCompleted: false, paused: false, updatedAt: at, version: 1 };
   }
   function requireOwned(follow, uid) {
     if (!follow || follow.owner !== uid || follow.kind !== 'follow') reject('NOT_FOLLOWING', '请先追番，再记录观看进度。');
@@ -91,7 +92,7 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
           const isNew = !stored && !known;
           if (isNew && (quota?.count ?? 0) >= 10) reject('RATE_LIMITED', '今天已补录 10 部新动漫，请明天再试。');
           const series = { ...(stored ?? known ?? { id: seriesId, title, platform: official.platform, url: official.url, cover: '', status: 'unknown', episodes: '待核验', events: [], checkedAt: at, source: official.url }), ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}) };
-          const follow = previous?.owner === uid && previous.kind === 'follow' ? previous : newFollow(uid, seriesId, at);
+          const follow = previous?.owner === uid && previous.kind === 'follow' ? normalizeEpisodeProgress(previous) : newFollow(uid, seriesId, at);
           if (!stored || !target) await tx.put(COLLECTIONS.series, seriesId, series);
           if (isNew) {
             await tx.put(COLLECTIONS.watch, quotaKey, { kind: 'quota', owner: uid, day: chinaDay(date), count: (quota?.count ?? 0) + 1 });
@@ -119,7 +120,7 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
             const limits = await readLimits(tx, uid, previous, target, date);
             let official;
             try { official = normalizeOfficialUrl(series.url); } catch { reject('INVALID_URL', '这个节目暂时没有可监控的官网链接，请补录有效链接。'); }
-            const follow = previous?.owner === uid && previous.kind === 'follow' ? previous : newFollow(uid, seriesId, at);
+            const follow = previous?.owner === uid && previous.kind === 'follow' ? normalizeEpisodeProgress(previous) : newFollow(uid, seriesId, at);
             const stored = await tx.get(COLLECTIONS.series, seriesId);
             if (!stored || !target) await tx.put(COLLECTIONS.series, seriesId, { ...series, ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}) });
             await writeLimits(tx, uid, limits, target, series, official, at);
@@ -128,15 +129,15 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
           }
           requireOwned(previous, uid);
           if (event.action === 'open') {
-            const follow = { ...previous, lastOpenedAt: at };
+            const follow = { ...normalizeEpisodeProgress(previous), lastOpenedAt: at };
             await tx.put(COLLECTIONS.watch, followId(uid, seriesId), follow);
             return cleanFollow(follow);
           }
-          const { watchedEpisode, positionSeconds, paused, version } = payload;
+          const { currentEpisode, episodeCompleted, paused, version } = payload;
           const latest = latestPublishedEpisode(series, date.getTime());
-          if (!Number.isInteger(watchedEpisode) || watchedEpisode < 0 || watchedEpisode > 10000 || (latest !== null && watchedEpisode > latest) || !Number.isInteger(positionSeconds) || positionSeconds < 0 || positionSeconds > 86400 || typeof paused !== 'boolean' || !Number.isInteger(version) || version < 1) reject('INVALID_PROGRESS', '请填写有效的已看集数、续看秒数和进度版本；已看集数不能超过官网已发布集数。');
+          if (!validEpisodeProgress(currentEpisode, episodeCompleted, latest) || typeof paused !== 'boolean' || !Number.isInteger(version) || version < 1) reject('INVALID_PROGRESS', '请填写有效的集数、是否看完和进度版本；集数不能超过官网已发布集数，0 集表示尚未开始。');
           if (version !== previous.version) reject('CONFLICT', '观看进度已在其他页面更新，请刷新后再保存。');
-          const follow = { ...previous, watchedEpisode, positionSeconds, paused, updatedAt: at, version: version + 1 };
+          const follow = { ...normalizeEpisodeProgress(previous), currentEpisode, episodeCompleted, paused, updatedAt: at, version: version + 1 };
           await tx.put(COLLECTIONS.watch, followId(uid, seriesId), follow);
           return cleanFollow(follow);
         });
