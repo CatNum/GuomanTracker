@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "国漫追更 · 主流平台国漫合集",
-  description: "汇集主流视频平台国漫，查看更新时间并直达官方播放。",
+  title: "国漫追更 · 现在看什么",
+  description: "管理国漫追番和观看进度，找到已更新、还没看的故事，直达官方播放。",
   other: {
     "codex-preview": "development",
   },

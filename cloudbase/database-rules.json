@@ -1,0 +1,5 @@
+{
+  "guoman_series": {"read": false, "write": false},
+  "guoman_watch_state": {"read": false, "write": false},
+  "guoman_monitor_targets": {"read": false, "write": false}
+}

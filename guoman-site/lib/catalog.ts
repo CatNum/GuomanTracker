@@ -3,6 +3,8 @@ export type Anime = {
   status: string; episodes: string; checkedAt: string; source: string;
   events: { at: number; label: string; published: boolean; delayed: boolean }[];
   days?: number[]; time?: string; schedule?: string;
+  latestEpisode?: number; monitoring?: 'queued'|'active'|'unsupported'|'error';
+  lastScanAt?: string; lastScanAttemptAt?: string; nextScanAt?: string; scanError?: string;
 };
 export const platforms: Record<string, {name:string; letter:string; color:string; home:string}> = {
   bilibili:{name:'哔哩哔哩',letter:'哔',color:'#fb7299',home:'https://www.bilibili.com/guochuang/'},

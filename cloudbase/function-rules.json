@@ -1,0 +1,5 @@
+{
+  "*": {"invoke": false},
+  "guoman-user": {"invoke": "auth != null && auth.loginType != 'ANONYMOUS'"},
+  "guoman-scan": {"invoke": false}
+}

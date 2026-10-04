@@ -17,4 +17,7 @@ dist/
 
 # Local environment values and credentials
 .env*
+!.env.example
 *.pem
+.cloudbase-deploy/
+/cloudbaserc.json

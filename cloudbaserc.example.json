@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "envId": "YOUR_CLOUDBASE_ENV_ID",
+  "functionRoot": "./.cloudbase-deploy",
+  "functions": [
+    {
+      "name": "guoman-user",
+      "handler": "index.main",
+      "runtime": "Nodejs20.19",
+      "timeout": 30,
+      "memorySize": 256,
+      "installDependency": true,
+      "ignore": ["node_modules", ".env*"]
+    },
+    {
+      "name": "guoman-scan",
+      "handler": "index.main",
+      "runtime": "Nodejs20.19",
+      "timeout": 120,
+      "memorySize": 256,
+      "installDependency": true,
+      "ignore": ["node_modules", ".env*"],
+      "envVariables": {"GUOMAN_SCAN_SECRET": "{{env.GUOMAN_SCAN_SECRET}}"}
+    }
+  ]
+}
