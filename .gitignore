@@ -1,0 +1,20 @@
+# Editor and local machine settings
+.idea/
+.DS_Store
+
+# Preserved Sites publishing history and isolated publishing checkouts
+/.sites-history/
+/.sites-publish/
+
+# Dependencies, build outputs, and local runtime state
+node_modules/
+dist/
+.next/
+.vinext/
+.wrangler/
+.sites-runtime/
+*.tsbuildinfo
+
+# Local environment values and credentials
+.env*
+*.pem
