@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="510" height="510" viewBox="0 0 510 510">
+<rect width="510" height="510" rx="16" fill="#1c241a"/>
+<rect x="1" y="1" width="508" height="508" rx="15" fill="none" stroke="#4d6340"/>
+<g font-family="PingFang SC,Microsoft YaHei,sans-serif">
+<text x="28" y="49" fill="#e5eddc" font-size="24" font-weight="600">更新观看进度</text>
+<text x="470" y="48" fill="#a6b29b" font-size="26">×</text>
+<text x="28" y="89" fill="#a6b29b" font-size="14">万古至尊：李云霄传</text>
+<text x="28" y="134" fill="#e5eddc" font-size="15">看到第几集</text>
+<rect x="28" y="151" width="64" height="64" rx="12" fill="#293720" stroke="#61794a"/>
+<path d="M49 183h22" fill="none" stroke="#d6edb9" stroke-width="3" stroke-linecap="round"/>
+<rect x="104" y="151" width="302" height="64" rx="12" fill="#12190f" stroke="#4d6340"/>
+<text x="255" y="192" text-anchor="middle" font-size="32" font-weight="600" fill="#e5eddc">24</text>
+<rect x="418" y="151" width="64" height="64" rx="12" fill="#293720" stroke="#61794a"/>
+<path d="M439 183h22m-11-11v22" fill="none" stroke="#d6edb9" stroke-width="3" stroke-linecap="round"/>
+<text x="28" y="244" fill="#93a286" font-size="12">0 表示还没开始 · 每次加减一集</text>
+<rect x="28" y="268" width="22" height="22" rx="5" fill="#c5f56b"/>
+<path d="m33 279 4 4 8-9" fill="none" stroke="#152009" stroke-width="2.5"/>
+<text x="62" y="285" fill="#e5eddc" font-size="15">这一集已看完</text>
+<text x="28" y="318" fill="#93a286" font-size="12">未看完继续这一集，看完后推荐下一集。</text>
+<rect x="28" y="346" width="22" height="22" rx="5" fill="#12190f" stroke="#61794a"/>
+<text x="62" y="363" fill="#e5eddc" font-size="14">暂停追番</text>
+<text x="28" y="404" fill="#93a286" font-size="12">集数与是否看完由你确认。</text>
+<rect x="28" y="432" width="454" height="50" rx="10" fill="#c5f56b"/>
+<text x="255" y="464" text-anchor="middle" fill="#152009" font-size="16" font-weight="600">保存观看进度</text>
+</g></svg>

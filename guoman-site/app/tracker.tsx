@@ -5,6 +5,7 @@ import {
   Check,
   ExternalLink,
   ListVideo,
+  Minus,
   Pause,
   Play,
   Plus,
@@ -1023,7 +1024,7 @@ function ProgressDialog({
             disabled={busy || !validEpisode || numericEpisode <= 0}
             onClick={() => changeEpisode(String(numericEpisode - 1))}
           >
-            −
+            <Minus size={26} strokeWidth={2.4} aria-hidden="true" />
           </button>
           <input
             id="progress-episode"
@@ -1044,7 +1045,7 @@ function ProgressDialog({
             disabled={busy || !validEpisode || numericEpisode >= maximum}
             onClick={() => changeEpisode(String(numericEpisode + 1))}
           >
-            +
+            <Plus size={26} strokeWidth={2.4} aria-hidden="true" />
           </button>
         </div>
         <p className="field-note">
