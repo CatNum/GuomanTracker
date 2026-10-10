@@ -95,6 +95,8 @@
 .workspace-dialog input:not([type=checkbox]):focus { outline:2px solid #b5e363; outline-offset:0; }
 .workspace-dialog .field-note { font-size:12px; color:#93a286; line-height:1.8; }
 .form-error { color:#ffd4bb; background:#422a20; border:1px solid #73503b; padding:10px 12px; border-radius:6px; font-size:13px; }
+.dialog-error { color:#ffd4bb; background:#422a20; border:1px solid #73503b; padding:10px 12px; border-radius:6px; font-size:13px; }
+.email-resend { display:block; margin:12px auto 0; }
 .workspace-dialog form>.primary-action { width:100%; margin-top:12px; }
 .workspace-dialog fieldset { margin:19px 0; padding:0; border:0; }
 .workspace-dialog legend { font-size:14px; margin-bottom:10px; }

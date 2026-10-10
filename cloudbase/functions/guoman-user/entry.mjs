@@ -10,13 +10,13 @@ export async function main(event) {
   try {
     // getUserInfo reads CloudBase runtime's verified identity, not event.uid.
     const trusted = app.auth().getUserInfo();
-    if (!trusted.uid || trusted.isAnonymous) return { ok: false, error: { code: 'UNAUTHENTICATED', message: '请先通过微信登录。' } };
+    if (!trusted.uid || trusted.isAnonymous) return { ok: false, error: { code: 'UNAUTHENTICATED', message: '请先登录账号。' } };
     if (!service) {
       const snapshot = JSON.parse(await readFile(new URL('../../seed/catalog.json', import.meta.url), 'utf8'));
       service = createUserService({ store: createCloudbaseStore(app.database()), seed: snapshot.items });
     }
     // Profile enrichment is optional; identity never depends on a user-supplied profile.
-    let displayName = '微信用户';
+    let displayName = '我的账号';
     let avatarUrl;
     if (event?.action === 'library') try {
       const profile = await app.auth().getEndUserInfo(trusted.uid);

@@ -1,5 +1,6 @@
 "use client";
 import { consumeOAuthState } from "./oauth-state";
+import { callAuthenticated, getAuthenticatedSession as readSession, sendEmailCode as sendCode, type EmailAuth } from "./cloud-auth";
 
 const env = process.env.NEXT_PUBLIC_CLOUDBASE_ENV_ID;
 const region = process.env.NEXT_PUBLIC_CLOUDBASE_REGION || "ap-shanghai";
@@ -8,7 +9,7 @@ export const cloudConfigured = !!env && !/PLACEHOLDER|YOUR_|<|>/i.test(env);
 let appPromise: Promise<import("@cloudbase/js-sdk").app.App> | undefined;
 export async function cloudApp() {
   if (!cloudConfigured)
-    throw new Error("微信登录尚未配置。可以先体验本机演示。");
+    throw new Error("邮箱登录尚未配置。可以先体验本机演示。");
   return (appPromise ??= import("@cloudbase/js-sdk").then(
     ({ default: cloudbase }) =>
       cloudbase.init({
@@ -25,24 +26,16 @@ export async function cloudCall(
   payload: Record<string, unknown> = {},
 ) {
   const app = await cloudApp();
-  const response = await app.callFunction({
-    name: "guoman-user",
-    data: { action, payload },
-  });
-  const result =
-    typeof response.result === "string"
-      ? JSON.parse(response.result)
-      : response.result;
-  if (!result || typeof result !== "object" || !("ok" in result))
-    throw new Error("云服务响应异常，请稍后再试");
-  const envelope = result as {
-    ok: boolean;
-    data?: unknown;
-    error?: { code: string; message: string };
-  };
-  if (!envelope.ok)
-    throw new Error(envelope.error?.message || "操作未完成，请稍后再试");
-  return envelope.data;
+  return callAuthenticated((app.auth() as unknown) as EmailAuth,
+    async (selectedAction, selectedPayload) => app.callFunction({
+      name: "guoman-user", data: { action: selectedAction, payload: selectedPayload },
+    }), action, payload);
+}
+export async function getAuthenticatedSession() {
+  return readSession((await cloudApp()).auth() as unknown as EmailAuth);
+}
+export async function sendEmailCode(email: string) {
+  return sendCode((await cloudApp()).auth() as unknown as EmailAuth, email);
 }
 export async function beginWechatLogin() {
   const app = await cloudApp();

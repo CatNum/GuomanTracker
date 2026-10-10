@@ -24,12 +24,14 @@ import {
 } from "@/lib/watching";
 import { createLocalLibrary } from "@/lib/local-library";
 import {
-  beginWechatLogin,
   cloudApp,
   cloudCall,
   cloudConfigured,
+  getAuthenticatedSession,
+  sendEmailCode,
 } from "@/lib/cloudbase-client";
-import { endCloudSession, followCatalogSeries } from "@/lib/account-actions";
+import { endCloudSession, followCatalogSeries, readDemoSelection } from "@/lib/account-actions";
+import { emailErrorMessage, emailRetryDelayMs, inspectAuthenticatedSession, verifyEmailCode, type EmailChallenge } from "@/lib/cloud-auth";
 
 type Mode = "guest" | "demo" | "cloud";
 type View = "watch" | "library" | "catalog";
@@ -61,7 +63,32 @@ export default function Tracker({
       follow: WatchState;
     } | null>(null);
   const [dialogError, setDialogError] = useState("");
+  const [loginOpen, setLoginOpen] = useState(false),
+    [email, setEmail] = useState(""),
+    [token, setToken] = useState(""),
+    [challenge, setChallenge] = useState<EmailChallenge | null>(null),
+    [sending, setSending] = useState(false),
+    [verifying, setVerifying] = useState(false),
+    [resendAt, setResendAt] = useState(0),
+    [loginError, setLoginError] = useState(""),
+    [needsLibraryRetry, setNeedsLibraryRetry] = useState(false),
+    [pendingAccount, setPendingAccount] = useState(false);
   const [now, setNow] = useState(Date.parse(checkedAt));
+  const [cooldownNow, setCooldownNow] = useState(0);
+  const authLock = useRef(false);
+  const generation = useRef(0);
+  const modeRef = useRef<Mode>("guest");
+  const mounted = useRef(true);
+  const loginTrigger = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!loginOpen || !resendAt || Date.now() >= resendAt) return;
+    const timer = setInterval(() => {
+      const current = Date.now();
+      setCooldownNow(current);
+      if (current >= resendAt) clearInterval(timer);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [loginOpen, resendAt]);
   const call = useCallback(
     async (
       action: string,
@@ -76,31 +103,65 @@ export default function Tracker({
   const reload = useCallback(
     async (selectedMode: Mode = mode) => {
       if (selectedMode === "guest") return;
-      setLibrary((await call("library", {}, selectedMode)) as Library);
+      const currentGeneration = generation.current;
+      const data = (await call("library", {}, selectedMode)) as Library;
+      if (mounted.current && currentGeneration === generation.current && selectedMode === modeRef.current)
+        setLibrary(data);
     },
     [call, mode],
   );
   useEffect(() => {
     let active = true;
+    const generationRef = generation;
+    mounted.current = true;
     async function initialize() {
+      const currentGeneration = generation.current;
+      let demoSelected = false;
+      let authenticated = false;
+      let sessionUncertain = false;
+      let sessionError: unknown;
       try {
-        let selected: Mode = "guest";
-        if (
-          cloudConfigured &&
-          (await (await cloudApp()).auth().getLoginState())
-        )
-          selected = "cloud";
-        else if (localStorage.getItem("guoman-demo-enabled") === "yes")
-          selected = "demo";
-        if (active) {
+        const demo = readDemoSelection(localStorage);
+        demoSelected = demo.selected;
+        const checked = cloudConfigured ? await inspectAuthenticatedSession(getAuthenticatedSession) : null;
+        authenticated = !!checked?.session;
+        sessionUncertain = checked?.uncertain === true;
+        sessionError = checked?.error;
+        const selected: Mode = authenticated ? "cloud" : demoSelected ? "demo" : "guest";
+        const data = selected === "guest" ? null : (await call("library", {}, selected)) as Library;
+        if (active && currentGeneration === generation.current) {
+          modeRef.current = selected;
           setMode(selected);
-          if (selected !== "guest") {
-            const data = (await call("library", {}, selected)) as Library;
-            if (active) setLibrary(data);
-          }
+          setLibrary(data);
+          if (sessionUncertain) {
+            setPendingAccount(true);
+            setNotice("账号状态暂未确认，可继续加载或退出账号：" + errorText(sessionError));
+          } else if (demo.error) setNotice(demo.error);
         }
       } catch (error) {
-        if (active) setNotice("账号数据加载未完成：" + errorText(error));
+        if (active && currentGeneration === generation.current) {
+          if (demoSelected) {
+            try {
+              const data = (await call("library", {}, "demo")) as Library;
+              if (active && currentGeneration === generation.current) {
+                modeRef.current = "demo";
+                setMode("demo");
+                setLibrary(data);
+              }
+            } catch {
+              // Keep the guest view if local browser storage is unavailable.
+            }
+          }
+          setNotice("账号数据加载未完成：" + errorText(error));
+          if (authenticated || sessionUncertain) {
+            setPendingAccount(true);
+            if (authenticated) {
+              setNeedsLibraryRetry(true);
+              setLoginOpen(true);
+              setLoginError("账号已登录，云端记录加载失败；当前记录保留，可重试加载。");
+            }
+          }
+        }
       } finally {
         if (active) setLoading(false);
       }
@@ -110,6 +171,8 @@ export default function Tracker({
     const timer = setInterval(() => setNow(Date.now()), 60000);
     return () => {
       active = false;
+      mounted.current = false;
+      generationRef.current++;
       clearInterval(timer);
     };
     // 首次挂载恢复明确选择的账号或本机演示。
@@ -128,7 +191,7 @@ export default function Tracker({
     message: string,
   ) {
     if (mode === "guest") {
-      setNotice("请先微信登录，或选择本机演示后再保存追番。");
+      setNotice("请先邮箱登录，或选择本机演示后再保存追番。");
       return false;
     }
     setBusy(true);
@@ -151,6 +214,8 @@ export default function Tracker({
     setBusy(true);
     try {
       localStorage.setItem("guoman-demo-enabled", "yes");
+      generation.current++;
+      modeRef.current = "demo";
       setMode("demo");
       await reload("demo");
       setNotice(
@@ -162,25 +227,144 @@ export default function Tracker({
       setBusy(false);
     }
   }
-  async function login() {
-    setBusy(true);
+  function openLogin(event: React.MouseEvent<HTMLButtonElement>) {
+    loginTrigger.current = event.currentTarget;
+    setLoginError("");
+    setCooldownNow(Date.now());
+    setLoginOpen(true);
+  }
+  function closeLogin() {
+    if (authLock.current) return;
+    setLoginOpen(false);
+    setLoginError("");
+  }
+  async function sendCode() {
+    if (authLock.current || Date.now() < resendAt) return;
+    authLock.current = true;
+    setSending(true);
+    setLoginError("");
     try {
-      await beginWechatLogin();
+      const next = await sendEmailCode(email);
+      if (!mounted.current) return;
+      setChallenge(next);
+      setToken("");
+      setResendAt(Date.now() + 60000);
+      setCooldownNow(Date.now());
     } catch (error) {
-      setNotice(errorText(error));
-      setBusy(false);
+      if (mounted.current) {
+        setLoginError(emailErrorMessage(error));
+        const delay = emailRetryDelayMs(error);
+        if (delay !== null) {
+          setResendAt(Date.now() + delay);
+          setCooldownNow(Date.now());
+        }
+      }
+    } finally {
+      authLock.current = false;
+      if (mounted.current) setSending(false);
+    }
+  }
+  async function loadVerifiedLibrary() {
+    const currentGeneration = generation.current;
+    const data = await cloudCall("library", {}) as Library;
+    if (!mounted.current || currentGeneration !== generation.current) return;
+    let demoMarkerError = false;
+    try { localStorage.removeItem("guoman-demo-enabled"); }
+    catch { demoMarkerError = true; }
+    generation.current++;
+    modeRef.current = "cloud";
+    setMode("cloud");
+    setLibrary(data);
+    setPendingAccount(false);
+    setNeedsLibraryRetry(false);
+    setEditing(null);
+    setSubmitOpen(false);
+    setLoginOpen(false);
+    setChallenge(null);
+    setToken("");
+    setNotice(demoMarkerError
+      ? "邮箱账号已登录，云端追番记录已加载；浏览器演示标记未能更新。"
+      : "邮箱账号已登录，云端追番记录已加载。");
+  }
+  async function verifyCode() {
+    if (authLock.current || !challenge) return;
+    authLock.current = true;
+    setVerifying(true);
+    setLoginError("");
+    let sessionMayExist = false;
+    try {
+      await verifyEmailCode((await cloudApp()).auth() as Parameters<typeof verifyEmailCode>[0], challenge, token, () => {
+        sessionMayExist = true;
+        if (mounted.current) setPendingAccount(true);
+      });
+      if (!mounted.current) return;
+      setNeedsLibraryRetry(true);
+      try { await loadVerifiedLibrary(); }
+      catch (error) { if (mounted.current) setLoginError("账号已登录，云端记录加载失败；当前记录保留，可重试加载。" + errorText(error)); }
+    } catch (error) {
+      if (mounted.current) setLoginError(sessionMayExist
+        ? "验证结果或账号会话暂未确认；当前记录保留，可重试加载或退出此账号。" + errorText(error)
+        : emailErrorMessage(error));
+    } finally {
+      authLock.current = false;
+      if (mounted.current) setVerifying(false);
+    }
+  }
+  async function retryLibrary() {
+    if (authLock.current) return;
+    authLock.current = true;
+    setVerifying(true);
+    try { await loadVerifiedLibrary(); }
+    catch (error) { if (mounted.current) setLoginError("云端记录仍未加载，当前记录保留，请稍后重试。" + errorText(error)); }
+    finally {
+      authLock.current = false;
+      if (mounted.current) setVerifying(false);
+    }
+  }
+  async function switchAccount() {
+    if (authLock.current) return;
+    authLock.current = true;
+    setVerifying(true);
+    try {
+      await endCloudSession((await cloudApp()).auth(), () => {
+        generation.current++;
+        setPendingAccount(false);
+        setNeedsLibraryRetry(false);
+        setChallenge(null);
+        setToken("");
+        setEmail("");
+        setLoginError("");
+      });
+    } catch (error) {
+      if (mounted.current) setLoginError(errorText(error));
+    } finally {
+      authLock.current = false;
+      if (mounted.current) setVerifying(false);
     }
   }
   async function logout() {
     setBusy(true);
     try {
       const clear = () => {
-        localStorage.removeItem("guoman-demo-enabled");
+        generation.current++;
+        modeRef.current = "guest";
+        let demoMarkerError = false;
+        try { localStorage.removeItem("guoman-demo-enabled"); }
+        catch { demoMarkerError = true; }
         setMode("guest");
         setLibrary(null);
-        setNotice("已退出当前账号。");
+        setPendingAccount(false);
+        setNeedsLibraryRetry(false);
+        setLoginOpen(false);
+        setChallenge(null);
+        setToken("");
+        setEmail("");
+        setLoginError("");
+        setNotice(demoMarkerError
+          ? "已退出当前账号；浏览器演示标记未能更新。"
+          : "已退出当前账号。");
       };
-      if (mode === "cloud")
+      if (mode === "cloud" || pendingAccount || needsLibraryRetry)
         await endCloudSession((await cloudApp()).auth(), clear);
       else clear();
     } catch (error) {
@@ -243,13 +427,13 @@ export default function Tracker({
         </a>
         <div className="account-menu">
           {mode === "guest" ? (
-            <button
-              className="secondary-action"
-              onClick={login}
-              disabled={busy || loading}
-            >
-              微信登录
-            </button>
+            <>
+              {pendingAccount && <span>账号连接待恢复</span>}
+              <button className="secondary-action" onClick={openLogin} disabled={busy || loading}>
+                {pendingAccount ? "继续加载" : "邮箱登录"}
+              </button>
+              {pendingAccount && <button className="text-action" onClick={logout} disabled={busy || loading}>退出账号</button>}
+            </>
           ) : (
             <>
               <span>
@@ -257,6 +441,7 @@ export default function Tracker({
                   ? "本机演示"
                   : library?.user.displayName || "我的账号"}
               </span>
+              {mode === "demo" && <button className="secondary-action" onClick={openLogin} disabled={busy || loading}>{pendingAccount ? "继续加载" : "邮箱登录"}</button>}
               <button className="text-action" disabled={busy} onClick={logout}>
                 {mode === "demo" ? "退出演示" : "退出"}
               </button>
@@ -290,7 +475,7 @@ export default function Tracker({
         </nav>
         {mode === "demo" && (
           <div className="demo-banner">
-            本机演示 · 未微信登录 · 数据仅保存在当前浏览器 · 不执行云端扫描
+            本机演示 · 数据仅保存在当前浏览器 · 不执行云端扫描
           </div>
         )}
         {notice && (
@@ -382,10 +567,10 @@ export default function Tracker({
                       <div className="action-row">
                         <button
                           className="primary-action"
-                          onClick={login}
+                          onClick={openLogin}
                           disabled={busy}
                         >
-                          微信登录并保存进度
+                          邮箱登录并保存进度
                         </button>
                         <button
                           className="secondary-action"
@@ -397,8 +582,8 @@ export default function Tracker({
                       </div>
                       <small>
                         {cloudConfigured
-                          ? "登录后记录会随微信账号保存。"
-                          : "微信登录等待上线配置，当前可以先浏览合集或体验本机演示。"}
+                          ? "登录后记录会随邮箱账号保存。"
+                          : "邮箱登录等待上线配置，当前可以先浏览合集或体验本机演示。"}
                       </small>
                     </div>
                   </section>
@@ -671,6 +856,38 @@ export default function Tracker({
         </a>
         <span>聚合信息 · 官方观看 · 不存储音视频</span>
       </footer>
+      {loginOpen && (
+        <DialogFrame title="邮箱验证码登录" onClose={closeLogin} locked={sending || verifying} returnFocusRef={loginTrigger}>
+          <p className="dialog-description">输入邮箱获取验证码。首次验证会建立账号；登录后读取该账号的云端追番记录。本机演示记录仍保留在浏览器中。</p>
+          <form onSubmit={(event) => { event.preventDefault(); void (pendingAccount || needsLibraryRetry ? retryLibrary() : challenge ? verifyCode() : sendCode()); }}>
+            <label>邮箱地址
+              <input type="email" autoComplete="email" required value={email} disabled={sending || verifying || pendingAccount || needsLibraryRetry}
+                onChange={(event) => { setEmail(event.target.value); setChallenge(null); setToken(""); setLoginError(""); }} />
+            </label>
+            {challenge && !pendingAccount && !needsLibraryRetry && <label>邮件验证码
+              <input inputMode="numeric" autoComplete="one-time-code" required value={token} disabled={sending || verifying}
+                onChange={(event) => setToken(event.target.value)} />
+            </label>}
+            {loginError && <p role="alert" className="dialog-error">{loginError}</p>}
+            {pendingAccount || needsLibraryRetry ? (
+              <>
+                <button type="submit" className="primary-action" disabled={sending || verifying}>重试确认账号并加载记录</button>
+                <button type="button" className="text-action email-resend" disabled={sending || verifying} onClick={() => void switchAccount()}>退出此账号并换邮箱</button>
+              </>
+            ) : (
+              <>
+                <button type="submit" className="primary-action" disabled={sending || verifying || (challenge !== null && !token.trim()) || (challenge === null && cooldownNow < resendAt)}>
+                  {sending ? "正在发送…" : verifying ? "正在验证…" : challenge ? "验证并登录" : cooldownNow < resendAt ? `请在 ${Math.ceil((resendAt - cooldownNow) / 1000)} 秒后发送` : "发送验证码"}
+                </button>
+                {challenge && <button type="button" className="text-action email-resend" disabled={sending || verifying || cooldownNow < resendAt}
+                  onClick={() => void sendCode()}>
+                  {cooldownNow < resendAt ? `请在 ${Math.ceil((resendAt - cooldownNow) / 1000)} 秒后重发` : "重新发送验证码"}
+                </button>}
+              </>
+            )}
+          </form>
+        </DialogFrame>
+      )}
       {submitOpen && (
         <SubmissionDialog
           busy={busy}
@@ -857,21 +1074,27 @@ function EmptyWorkspace({
 function DialogFrame({
   title,
   onClose,
+  locked = false,
+  returnFocusRef,
   children,
 }: {
   title: string;
   onClose: () => void;
+  locked?: boolean;
+  returnFocusRef?: React.RefObject<HTMLButtonElement | null>;
   children: React.ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
+    const focusRef = returnFocusRef;
     dialog.current?.showModal();
     const old = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = old;
+      if (focusRef?.current?.isConnected) focusRef.current.focus();
     };
-  }, []);
+  }, [returnFocusRef]);
   return (
     <dialog
       ref={dialog}
@@ -884,11 +1107,21 @@ function DialogFrame({
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
+      onKeyDown={(e) => {
+        if (e.key !== "Tab") return;
+        const elements = Array.from(dialog.current?.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
+        ) || []);
+        if (!elements.length) return;
+        const first = elements[0], last = elements[elements.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }}
     >
       <section className="workspace-dialog">
         <div className="dialog-heading">
           <h2 id="modal-title">{title}</h2>
-          <button aria-label="关闭窗口" onClick={onClose}>
+          <button aria-label="关闭窗口" onClick={onClose} disabled={locked}>
             <X size={20} />
           </button>
         </div>

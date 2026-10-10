@@ -57,7 +57,7 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
   return async function handle(event, identity) {
     try {
       const uid = identity?.uid;
-      if (typeof uid !== 'string' || !uid.trim() || uid.length > 256 || identity.isAnonymous === true) reject('UNAUTHENTICATED', '请先通过微信登录。');
+      if (typeof uid !== 'string' || !uid.trim() || uid.length > 256 || identity.isAnonymous === true) reject('UNAUTHENTICATED', '请先登录账号。');
       const payload = event?.payload ?? {};
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) reject('INVALID_REQUEST', '请求格式无效。');
       const date = new Date(now());
@@ -69,7 +69,7 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
         const owned = records.filter((follow) => follow.owner === uid && follow.kind === 'follow');
         const series = (await Promise.all(owned.map((follow) => lookupSeries(follow.seriesId)))).filter(Boolean);
         data = {
-          user: { uid, displayName: typeof identity.displayName === 'string' ? identity.displayName.slice(0, 80) : '微信用户', ...(typeof identity.avatarUrl === 'string' && identity.avatarUrl.startsWith('https://') ? { avatarUrl: identity.avatarUrl } : {}) },
+          user: { uid, displayName: typeof identity.displayName === 'string' ? identity.displayName.slice(0, 80) : '我的账号', ...(typeof identity.avatarUrl === 'string' && identity.avatarUrl.startsWith('https://') ? { avatarUrl: identity.avatarUrl } : {}) },
           series: series.map(cleanSeries), follows: owned.map(cleanFollow),
         };
       } else if (event?.action === 'submit') {
