@@ -10,6 +10,16 @@ export type EmailChallenge = {
   verify(input: { token: string }): Promise<unknown>;
 };
 
+/** A business envelope returned by the server, with its safe error code. */
+export class CloudActionError extends Error {
+  code: string | null;
+  constructor(message: string, code: unknown) {
+    super(message);
+    this.name = 'CloudActionError';
+    this.code = typeof code === 'string' && /^[A-Z_]{2,40}$/.test(code) ? code : null;
+  }
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? value as Record<string, unknown> : null;
 }
@@ -111,6 +121,9 @@ export async function callAuthenticated<T>(
   const value = typeof response.result === "string" ? JSON.parse(response.result) : response.result;
   const envelope = record(value);
   if (typeof envelope?.ok !== "boolean") throw new Error("云服务响应异常，请稍后再试。");
-  if (!envelope.ok) throw new Error(String(record(envelope.error)?.message || "操作未完成，请稍后再试。"));
+  if (!envelope.ok) {
+    const error = record(envelope.error);
+    throw new CloudActionError(String(error?.message || "操作未完成，请稍后再试。"), error?.code);
+  }
   return envelope.data as T;
 }

@@ -31,7 +31,8 @@ import {
   sendEmailCode,
 } from "@/lib/cloudbase-client";
 import { endCloudSession, followCatalogSeries, readDemoSelection } from "@/lib/account-actions";
-import { emailErrorMessage, emailRetryDelayMs, inspectAuthenticatedSession, verifyEmailCode, type EmailChallenge } from "@/lib/cloud-auth";
+import { CloudActionError, emailErrorMessage, emailRetryDelayMs, inspectAuthenticatedSession, verifyEmailCode, type EmailChallenge } from "@/lib/cloud-auth";
+import { isDefinitiveBusinessRejection, runLibraryOperation } from "@/lib/library-operation";
 
 type Mode = "guest" | "demo" | "cloud";
 type View = "watch" | "library" | "catalog";
@@ -63,6 +64,7 @@ export default function Tracker({
       follow: WatchState;
     } | null>(null);
   const [dialogError, setDialogError] = useState("");
+  const [needsLibraryRefresh, setNeedsLibraryRefresh] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false),
     [email, setEmail] = useState(""),
     [token, setToken] = useState(""),
@@ -76,6 +78,8 @@ export default function Tracker({
   const [now, setNow] = useState(Date.parse(checkedAt));
   const [cooldownNow, setCooldownNow] = useState(0);
   const authLock = useRef(false);
+  const mutationLock = useRef(false);
+  const needsLibraryRefreshRef = useRef(false);
   const generation = useRef(0);
   const modeRef = useRef<Mode>("guest");
   const mounted = useRef(true);
@@ -102,11 +106,14 @@ export default function Tracker({
   );
   const reload = useCallback(
     async (selectedMode: Mode = mode) => {
-      if (selectedMode === "guest") return;
+      if (selectedMode === "guest") return null;
       const currentGeneration = generation.current;
       const data = (await call("library", {}, selectedMode)) as Library;
-      if (mounted.current && currentGeneration === generation.current && selectedMode === modeRef.current)
+      if (mounted.current && currentGeneration === generation.current && selectedMode === modeRef.current) {
         setLibrary(data);
+        return data;
+      }
+      return null;
     },
     [call, mode],
   );
@@ -185,29 +192,94 @@ export default function Tracker({
   const followed = library?.follows.map((x) => x.seriesId) || [];
   const activeCount = library?.follows.filter((x) => !x.paused).length || 0;
 
+  function markLibraryRefresh(value: boolean) {
+    needsLibraryRefreshRef.current = value;
+    setNeedsLibraryRefresh(value);
+  }
+
+  async function refreshLibrary() {
+    if (mutationLock.current || modeRef.current === "guest") return;
+    mutationLock.current = true;
+    const selectedMode = modeRef.current;
+    const currentGeneration = generation.current;
+    const current = () => mounted.current && generation.current === currentGeneration && modeRef.current === selectedMode;
+    setBusy(true);
+    try {
+      const data = await reload(selectedMode);
+      if (!data || !current()) return;
+      if (needsLibraryRefreshRef.current) {
+        markLibraryRefresh(false);
+        setEditing(null);
+        setSubmitOpen(false);
+      }
+      setNotice("观看记录已刷新；更新时间以最近官网核验为准。");
+      setDialogError("");
+    } catch (error) {
+      if (current()) setNotice("记录重新加载未完成，请稍后重试。" + errorText(error));
+    } finally {
+      mutationLock.current = false;
+      if (current()) setBusy(false);
+    }
+  }
+
   async function perform(
     action: string,
     payload: Record<string, unknown>,
     message: string,
   ) {
-    if (mode === "guest") {
+    const selectedMode = modeRef.current;
+    if (selectedMode === "guest") {
       setNotice("请先邮箱登录，或选择本机演示后再保存追番。");
       return false;
     }
+    if (needsLibraryRefreshRef.current) {
+      setNotice("请先重新加载记录，再继续保存。");
+      return false;
+    }
+    if (mutationLock.current) return false;
+    mutationLock.current = true;
+    const currentGeneration = generation.current;
+    const current = () => mounted.current && generation.current === currentGeneration && modeRef.current === selectedMode;
     setBusy(true);
     setNotice("");
     setDialogError("");
     try {
-      await call(action, payload);
-      await reload();
-      setNotice(message);
-      return true;
-    } catch (error) {
-      setNotice(errorText(error));
-      setDialogError(errorText(error));
+      const result = await runLibraryOperation(
+        () => call(action, payload, selectedMode),
+        async () => {
+          if (!current()) throw new Error("账号已切换");
+          const data = await reload(selectedMode);
+          if (!data) throw new Error("账号已切换");
+          return data;
+        },
+        (error) => selectedMode === "demo" || isDefinitiveBusinessRejection(error),
+      );
+      if (!current()) return false;
+      if (result.kind === "saved") {
+        markLibraryRefresh(false);
+        setNotice(message);
+        return true;
+      }
+      if (result.kind === "saved-unrefreshed") {
+        markLibraryRefresh(true);
+        setNotice("已保存，展示待刷新。请重新加载记录后继续操作。");
+        return true;
+      }
+      if (result.kind === "unknown" || (result.error instanceof CloudActionError && result.error.code === "CONFLICT")) {
+        markLibraryRefresh(true);
+        const text = result.kind === "unknown"
+          ? "提交结果暂未确认，请先重新加载记录。"
+          : "记录版本已变化，请先重新加载记录。";
+        setNotice(text);
+        setDialogError(text);
+        return false;
+      }
+      setNotice(errorText(result.error));
+      setDialogError(errorText(result.error));
       return false;
     } finally {
-      setBusy(false);
+      mutationLock.current = false;
+      if (current()) setBusy(false);
     }
   }
   async function startDemo() {
@@ -215,6 +287,7 @@ export default function Tracker({
     try {
       localStorage.setItem("guoman-demo-enabled", "yes");
       generation.current++;
+      markLibraryRefresh(false);
       modeRef.current = "demo";
       setMode("demo");
       await reload("demo");
@@ -272,9 +345,11 @@ export default function Tracker({
     try { localStorage.removeItem("guoman-demo-enabled"); }
     catch { demoMarkerError = true; }
     generation.current++;
+    markLibraryRefresh(false);
     modeRef.current = "cloud";
     setMode("cloud");
     setLibrary(data);
+    setBusy(false);
     setPendingAccount(false);
     setNeedsLibraryRetry(false);
     setEditing(null);
@@ -328,8 +403,10 @@ export default function Tracker({
     try {
       await endCloudSession((await cloudApp()).auth(), () => {
         generation.current++;
+        markLibraryRefresh(false);
         setPendingAccount(false);
         setNeedsLibraryRetry(false);
+        setBusy(false);
         setChallenge(null);
         setToken("");
         setEmail("");
@@ -347,12 +424,14 @@ export default function Tracker({
     try {
       const clear = () => {
         generation.current++;
+        markLibraryRefresh(false);
         modeRef.current = "guest";
         let demoMarkerError = false;
         try { localStorage.removeItem("guoman-demo-enabled"); }
         catch { demoMarkerError = true; }
         setMode("guest");
         setLibrary(null);
+        setBusy(false);
         setPendingAccount(false);
         setNeedsLibraryRetry(false);
         setLoginOpen(false);
@@ -374,7 +453,7 @@ export default function Tracker({
     }
   }
   function openOfficial(series: Anime) {
-    if (mode !== "guest")
+    if (mode !== "guest" && !needsLibraryRefreshRef.current)
       void perform(
         "open",
         { seriesId: series.id },
@@ -486,6 +565,14 @@ export default function Tracker({
             </button>
           </div>
         )}
+        {needsLibraryRefresh && mode !== "guest" && (
+          <div className="notice" role="status">
+            <span>当前记录等待重新加载，保存操作已暂停。</span>
+            <button className="secondary-action" disabled={busy} onClick={() => void refreshLibrary()}>
+              <RefreshCw size={14} />重新加载记录
+            </button>
+          </div>
+        )}
         {loading ? (
           <div className="workspace-empty">正在恢复观看记录…</div>
         ) : (
@@ -497,7 +584,7 @@ export default function Tracker({
                 embedded
                 followed={followed}
                 onFollow={(series) => {
-                  if (!busy)
+                  if (!busy && !needsLibraryRefreshRef.current)
                     void followCatalogSeries(
                       series,
                       [...initial, ...(library?.series || [])],
@@ -539,17 +626,7 @@ export default function Tracker({
                     <button
                       className="sync-button"
                       disabled={busy}
-                      onClick={() => {
-                        setBusy(true);
-                        void reload()
-                          .then(() =>
-                            setNotice(
-                              "观看记录已刷新；更新时间以最近官网核验为准。",
-                            ),
-                          )
-                          .catch((e) => setNotice(errorText(e)))
-                          .finally(() => setBusy(false));
-                      }}
+                      onClick={() => void refreshLibrary()}
                     >
                       <RefreshCw size={14} />
                       刷新记录
@@ -651,7 +728,7 @@ export default function Tracker({
                                 </div>
                                 <PlaybackActions
                                   candidate={queue.ready[0]}
-                                  busy={busy}
+                                  busy={busy || needsLibraryRefresh}
                                   onOpen={openOfficial}
                                   onEdit={editProgress}
                                   onComplete={complete}
@@ -673,7 +750,7 @@ export default function Tracker({
                                 <WatchCard
                                   key={candidate.series.id}
                                   candidate={candidate}
-                                  busy={busy}
+                                  busy={busy || needsLibraryRefresh}
                                   onOpen={openOfficial}
                                   onEdit={editProgress}
                                   onComplete={complete}
@@ -709,7 +786,7 @@ export default function Tracker({
                               <WatchCard
                                 key={candidate.series.id}
                                 candidate={candidate}
-                                busy={busy}
+                                busy={busy || needsLibraryRefresh}
                                 onOpen={openOfficial}
                                 onEdit={editProgress}
                                 onComplete={complete}
@@ -811,7 +888,7 @@ export default function Tracker({
                                     </a>
                                     <button
                                       className="secondary-action"
-                                      disabled={busy}
+                                      disabled={busy || needsLibraryRefresh}
                                       onClick={() =>
                                         editProgress({ series, follow })
                                       }
@@ -820,7 +897,7 @@ export default function Tracker({
                                     </button>
                                     <button
                                       className="text-action"
-                                      disabled={busy}
+                                      disabled={busy || needsLibraryRefresh}
                                       onClick={() =>
                                         void perform(
                                           "unfollow",
@@ -890,7 +967,7 @@ export default function Tracker({
       )}
       {submitOpen && (
         <SubmissionDialog
-          busy={busy}
+          busy={busy || needsLibraryRefresh}
           mode={mode}
           error={dialogError}
           onClose={() => setSubmitOpen(false)}
@@ -913,7 +990,7 @@ export default function Tracker({
         <ProgressDialog
           series={editing.series}
           follow={editing.follow}
-          busy={busy}
+          busy={busy || needsLibraryRefresh}
           error={dialogError}
           onClose={() => setEditing(null)}
           onSave={async (values) => {

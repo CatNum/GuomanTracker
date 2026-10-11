@@ -5,6 +5,7 @@ import { Play, Search, CalendarDays, Layers3, ExternalLink, Clock3, RefreshCw, C
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
 import { platforms, chinaDay, chinaDate, dayNames, scheduleText, upcoming, validSchedule, type Anime } from '@/lib/catalog';
+import { paginateCatalog } from '@/lib/catalog-pagination';
 export default function Catalog({initial,checkedAt,embedded=false,onFollow,followed=[]}:{initial:Anime[];checkedAt:string;embedded?:boolean;onFollow?:(series:Anime)=>void;followed?:string[]}){
  const Content=embedded?'div':'main';
  const [items,setItems]=useState(initial);const [now,setNow]=useState(0);const [query,setQuery]=useState('');const [platform,setPlatform]=useState('all');const [status,setStatus]=useState('all');const [view,setView]=useState('all');const [day,setDay]=useState(-1);const [page,setPage]=useState(1);const [refresh,setRefresh]=useState(false);const [note,setNote]=useState('');
@@ -44,7 +45,7 @@ export default function Catalog({initial,checkedAt,embedded=false,onFollow,follo
   if(x!==null&&y!==null)return x-y;
   if(x!==null)return -1;if(y!==null)return 1;return 0;
  }),[items,platform,query,status,view,day,t]);
- const pages=Math.max(1,Math.ceil(filtered.length/18));const visible=filtered.slice((page-1)*18,page*18);
+ const {pages,effectivePage,visible,previousPage,nextPage}=paginateCatalog(filtered,page,18);
  function reset(){setPlatform('all');setStatus('all');setQuery('');setDay(-1);setPage(1)}
  const dateLabel=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric',weekday:'long'}).format(t);
  return <div className={embedded?'embedded-catalog':'site-shell'}>
@@ -61,7 +62,7 @@ export default function Catalog({initial,checkedAt,embedded=false,onFollow,follo
      <p className="live-note" role="status">{note||'收录与排期以官方页面为准'}</p>
      {['all','week'].map(v=><TabsContent value={v} key={v}><div className="anime-grid">{visible.map(a=>{const p=platforms[a.platform];const next=upcoming(a,t);const isToday=next&&chinaDate(next)===chinaDate(t);return <article key={a.id} className="anime-card"><a href={a.url} target="_blank" rel="noopener noreferrer" className="cover-link" aria-label={`前往${p.name}观看${a.title}`}><div className="cover"><img src={a.cover} alt={a.title+'官方封面'} loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/><span className="cover-fallback">{a.title}</span><span className="platform-badge" style={{color:p.color}}>{p.name}</span><span className="episode-label">{a.episodes||'前往平台查看'}</span><span className="cover-play"><Play fill="currentColor" size={21}/></span></div></a><div className="card-body"><h2 title={a.title}>{a.title}</h2><div title={scheduleText(a,t)} className={'schedule '+(isToday?'today':'')}><Clock3 size={14}/><span>{scheduleText(a,t)}</span>{isToday&&<b>今日</b>}</div><div className="card-bottom"><a href={a.url} target="_blank" rel="noopener noreferrer">官方播放<ExternalLink size={13}/></a><span>{a.status==='finished'?'已完结':a.status==='ongoing'?'连载中':'状态待核验'}</span></div></div>{onFollow&&<button className="follow-button" disabled={followed.includes(a.id)} onClick={()=>onFollow(a)}>{followed.includes(a.id)?"已追番":"＋ 加入追番"}</button>}</article>})}</div>{!visible.length&&<div className="empty-state"><Search size={30}/><h2>{platform!=='all'&&counts[platform]===0?'该平台作品正在补充':'没有找到符合条件的国漫'}</h2><p>可以查看平台官方目录，或调整筛选条件。</p><button onClick={reset}>清除筛选</button>{platform!=='all'&&<a href={platforms[platform].home} target="_blank" rel="noopener noreferrer">访问{platforms[platform].name}官方目录<ExternalLink size={14}/></a>}</div>}</TabsContent>)}
     </Tabs>
-    {pages>1&&<nav className="pagination" aria-label="作品分页"><button aria-label="上一页" disabled={page===1} onClick={()=>setPage(x=>x-1)}><ChevronLeft size={17}/></button><span>第 {page} / {pages} 页</span><button aria-label="下一页" disabled={page===pages} onClick={()=>setPage(x=>x+1)}><ChevronRight size={17}/></button></nav>}
+    {pages>1&&<nav className="pagination" aria-label="作品分页"><button aria-label="上一页" disabled={previousPage===null} onClick={()=>setPage(previousPage ?? effectivePage)}><ChevronLeft size={17}/></button><span>第 {effectivePage} / {pages} 页</span><button aria-label="下一页" disabled={nextPage===null} onClick={()=>setPage(nextPage ?? effectivePage)}><ChevronRight size={17}/></button></nav>}
    </section>
    <section className="source-note"><div><span className="source-label">收录说明</span><p>已接入哔哩哔哩国创索引与腾讯、优酷、爱奇艺的部分国漫；芒果TV收录正在补充。更新时间为官方已公布排期，具体上线、会员与地区权益以平台为准。</p><p>手机点击官方播放链接可由平台尝试唤起 App；是否唤起及自动播放取决于设备和平台支持。</p></div><span>目录核验：{chinaDate(Date.parse(checkedAt))}</span></section>
   </Content>{!embedded&&<footer><a className="footer-brand" href="/">国漫追更 <span>GUOMAN TRACKER</span></a><span>聚合信息 · 官方观看 · 不存储音视频</span></footer>}

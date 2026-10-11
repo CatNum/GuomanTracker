@@ -106,6 +106,10 @@ test("正式会话调用云函数仍验证业务信封", async () => {
   const auth = { getSession: async () => session };
   assert.deepEqual(await callAuthenticated(auth, async () => ({ result: { ok: true, data: { follows: [] } } }), "library", {}), { follows: [] });
   await assert.rejects(() => callAuthenticated(auth, async () => ({ result: { ok: false, error: { message: "denied" } } }), "library", {}), /denied/);
+  await assert.rejects(
+    () => callAuthenticated(auth, async () => ({ result: { ok: false, error: { code: "CONFLICT", message: "版本冲突" } } }), "progress", {}),
+    (error: unknown) => error instanceof Error && 'code' in error && error.code === 'CONFLICT',
+  );
 });
 
 test("验证码回调成功后会话查询失败仍标记待恢复，可重试而无需再次发码", async () => {
