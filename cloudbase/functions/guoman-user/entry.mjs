@@ -8,6 +8,7 @@ const envId = 'guoman-d1goxm3hhb53752a4';
 
 export const main = createPgUserHandler({
   app,
+  parseContext: cloudbase.parseContext,
   loadSeed: async () => {
     const snapshot = JSON.parse(await readFile(new URL('../../seed/catalog.json', import.meta.url), 'utf8'));
     if (!Array.isArray(snapshot.items)) throw new Error('目录快照无效');
