@@ -1,4 +1,6 @@
 import { COLLECTIONS } from './user-service.mjs';
+import { CommitUnconfirmedError } from './pg-errors.mjs';
+export { CommitUnconfirmedError } from './pg-errors.mjs';
 
 const ALLOWED_COLLECTIONS = new Set(Object.values(COLLECTIONS));
 const MAX_KEYS = 128;
@@ -8,15 +10,6 @@ const MAX_ATTEMPTS = 3;
 
 class StoreValidationError extends TypeError {}
 class StoreReadError extends Error {}
-
-/** A submitted commit may have applied even when its response was lost. */
-export class CommitUnconfirmedError extends Error {
-  constructor(cause) {
-    super('保存结果未确认，请刷新记录', { cause });
-    this.name = 'CommitUnconfirmedError';
-    this.code = 'TX_OUTCOME_UNKNOWN';
-  }
-}
 
 function checkKey(collection, id) {
   if (!ALLOWED_COLLECTIONS.has(collection)) throw new StoreValidationError('无效的集合');

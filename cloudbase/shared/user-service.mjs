@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { normalizeOfficialUrl } from './official-links.mjs';
 import { latestPublishedEpisode } from './published-episode.mjs';
 import { normalizeEpisodeProgress, validEpisodeProgress } from './episode-progress.mjs';
+import { CommitUnconfirmedError } from './pg-errors.mjs';
 
 export const COLLECTIONS = Object.freeze({ series: 'guoman_series', watch: 'guoman_watch_state', targets: 'guoman_monitor_targets' });
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -145,6 +146,7 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
       return { ok: true, data };
     } catch (error) {
       if (error instanceof UserError) return { ok: false, error: { code: error.code, message: error.message } };
+      if (error instanceof CommitUnconfirmedError) return { ok: false, error: { code: error.code, message: error.message } };
       return { ok: false, error: { code: 'SERVICE_UNAVAILABLE', message: '云服务暂时不可用，请稍后重试。' } };
     }
   };

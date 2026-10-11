@@ -1,30 +1,24 @@
 import cloudbase from '@cloudbase/node-sdk';
+import CloudBase from '@cloudbase/manager-node';
 import { readFile } from 'node:fs/promises';
-import { createUserService } from '../../shared/user-service.mjs';
-import { createCloudbaseStore } from '../../shared/cloudbase-store.mjs';
+import { createPgUserHandler } from '../../shared/pg-user-handler.mjs';
 
 const app = cloudbase.init({ env: cloudbase.SYMBOL_CURRENT_ENV });
-let service;
+const envId = 'guoman-d1goxm3hhb53752a4';
 
-export async function main(event) {
-  try {
-    // getUserInfo reads CloudBase runtime's verified identity, not event.uid.
-    const trusted = app.auth().getUserInfo();
-    if (!trusted.uid || trusted.isAnonymous) return { ok: false, error: { code: 'UNAUTHENTICATED', message: '请先登录账号。' } };
-    if (!service) {
-      const snapshot = JSON.parse(await readFile(new URL('../../seed/catalog.json', import.meta.url), 'utf8'));
-      service = createUserService({ store: createCloudbaseStore(app.database()), seed: snapshot.items });
-    }
-    // Profile enrichment is optional; identity never depends on a user-supplied profile.
-    let displayName = '我的账号';
-    let avatarUrl;
-    if (event?.action === 'library') try {
-      const profile = await app.auth().getEndUserInfo(trusted.uid);
-      displayName = profile.userInfo?.nickName || displayName;
-      avatarUrl = profile.userInfo?.avatarUrl;
-    } catch { /* Personal operations still work when optional profile lookup fails. */ }
-    return await service(event, { uid: trusted.uid, displayName, avatarUrl, isAnonymous: trusted.isAnonymous });
-  } catch {
-    return { ok: false, error: { code: 'SERVICE_UNAVAILABLE', message: '云服务暂时不可用，请稍后重试。' } };
-  }
-}
+export const main = createPgUserHandler({
+  app,
+  loadSeed: async () => {
+    const snapshot = JSON.parse(await readFile(new URL('../../seed/catalog.json', import.meta.url), 'utf8'));
+    if (!Array.isArray(snapshot.items)) throw new Error('目录快照无效');
+    return snapshot.items;
+  },
+  createManager: () => {
+    // SCF provides short-lived credentials. Read them inside each invocation.
+    const secretId = process.env.TENCENTCLOUD_SECRETID;
+    const secretKey = process.env.TENCENTCLOUD_SECRETKEY;
+    const token = process.env.TENCENTCLOUD_SESSIONTOKEN;
+    if (!secretId || !secretKey || !token) throw new Error('运行时管理凭证缺失');
+    return new CloudBase({ envId, region: 'ap-shanghai', secretId, secretKey, token });
+  },
+});

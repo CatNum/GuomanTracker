@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { createUserService } from '../shared/user-service.mjs';
 import { createCloudbaseStore } from '../shared/cloudbase-store.mjs';
 import { latestPublishedEpisode } from '../shared/published-episode.mjs';
+import { CommitUnconfirmedError } from '../shared/pg-store.mjs';
 
 test('SCF CommonJS entry exposes its callable index.main without loading network dependencies', () => {
   const require = createRequire(import.meta.url);
@@ -123,6 +124,19 @@ test('validation errors and internal failures use safe envelopes', async () => {
   const result = await service({ action: 'library' }, { uid: 'alice' });
   assert.equal(result.error.code, 'SERVICE_UNAVAILABLE');
   assert.ok(!JSON.stringify(result).includes('SECRET_INTERNAL'));
+});
+
+test('uncertain PG commit returns a distinct refresh-required envelope without leaking its cause', async () => {
+  const store = {
+    transaction: async () => { throw new CommitUnconfirmedError(new Error('PRIVATE_NETWORK_DETAIL')); },
+  };
+  const service = createUserService({ store, seed });
+  const result = await service({ action: 'unfollow', payload: { seriesId: 'bili-seed' } }, { uid: 'alice' });
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: 'TX_OUTCOME_UNKNOWN', message: '保存结果未确认，请刷新记录' },
+  });
+  assert.ok(!JSON.stringify(result).includes('PRIVATE_NETWORK_DETAIL'));
 });
 
 test('CloudBase anonymous identities with a uid are rejected', async () => {
