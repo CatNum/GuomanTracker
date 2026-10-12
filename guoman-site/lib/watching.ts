@@ -117,15 +117,19 @@ export function watchingQueue(
   return { ready, caughtUp, unknown, thisWeek };
 }
 
-/** Choose one available recommendation by the persisted complete user order. */
-export function recommendedCandidate(ready: WatchCandidate[], priorityOrder: string[]): WatchCandidate | null {
-  if (!ready.length) return null;
+/** 按用户保存的完整追番优先级排序所有可推荐作品，供卡组与首推复用同一比较规则。 */
+export function orderedRecommendations(ready: WatchCandidate[], priorityOrder: string[]): WatchCandidate[] {
   const priority = new Map(priorityOrder.map((id, index) => [id, index]));
   return [...ready].sort((a, b) =>
     (priority.get(a.series.id) ?? Number.MAX_SAFE_INTEGER) - (priority.get(b.series.id) ?? Number.MAX_SAFE_INTEGER) ||
     Number(b.follow.currentEpisode > 0 && !b.follow.episodeCompleted) - Number(a.follow.currentEpisode > 0 && !a.follow.episodeCompleted) ||
     nameCollator.compare(a.series.title, b.series.title) || compareIds(a.series.id, b.series.id),
-  )[0];
+  );
+}
+
+/** 返回完整优先级中的首部可推荐作品；无候选时返回 null。 */
+export function recommendedCandidate(ready: WatchCandidate[], priorityOrder: string[]): WatchCandidate | null {
+  return orderedRecommendations(ready, priorityOrder)[0] || null;
 }
 
 /** Sort every follow ID, keeping stored order first and appending legacy omissions by pinyin name. */

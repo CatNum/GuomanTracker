@@ -15,12 +15,13 @@ import {
   X,
 } from "lucide-react";
 import Catalog from "./catalog";
+import RecommendationDeck from "@/components/recommendation-deck";
 import { isSupportedPlatform, platforms, type Anime } from "@/lib/catalog";
 import {
   watchingQueue,
   latestPublishedEpisode,
   filterFollowIds,
-  recommendedCandidate,
+  orderedRecommendations,
   sortFollowIds,
   type Library,
   type WatchState,
@@ -217,7 +218,7 @@ export default function Tracker({
     () => sortFollowIds(library?.follows || [], library?.series || [], library?.priorityOrder || [], "priority"),
     [library],
   );
-  const recommendation = recommendedCandidate(queue.ready, fullPriorityOrder);
+  const recommendations = orderedRecommendations(queue.ready, fullPriorityOrder);
   const visibleFollowIds = useMemo(() => {
     if (!library) return [];
     const visible = new Set(filterFollowIds(library.follows, queue, listFilter, queue.thisWeek.map((candidate) => candidate.series.id)));
@@ -715,41 +716,34 @@ export default function Tracker({
                   </section>
                 ) : (
                   <>
-                    {recommendation ? (
-                      <section className="featured-watch" aria-label="优先推荐观看">
-                        <div className="featured-cover">
-                          {recommendation.series.cover && (
-                            <img
-                              src={recommendation.series.cover}
-                              alt=""
-                              referrerPolicy="no-referrer"
-                              onError={(e) => { e.currentTarget.style.display = "none"; }}
+                    {recommendations.length ? (
+                      <RecommendationDeck
+                        key={library?.user.uid || "no-account"}
+                        candidates={recommendations}
+                        renderDetails={(candidate) => (
+                          <div className="featured-body">
+                            <span className="small-label">
+                              {!candidate.follow.episodeCompleted && candidate.follow.currentEpisode > 0
+                                ? "接着上次的故事"
+                                : "有未看内容"}
+                            </span>
+                            <h2>{candidate.series.title}</h2>
+                            <p>{progressLabel(candidate.follow)} · 已核验至第 {candidate.latestEpisode} 集</p>
+                            <div className="next-episode">
+                              从第 <b>{candidate.nextEpisode}</b> 集继续
+                              <span>还有 {candidate.unwatched} 集未看</span>
+                            </div>
+                            <PlaybackActions
+                              candidate={candidate}
+                              busy={busy || needsLibraryRefresh}
+                              onOpen={openOfficial}
+                              onEdit={editProgress}
+                              onComplete={complete}
                             />
-                          )}
-                          <span><Play size={42} /></span>
-                        </div>
-                        <div className="featured-body">
-                          <span className="small-label">
-                            {!recommendation.follow.episodeCompleted && recommendation.follow.currentEpisode > 0
-                              ? "接着上次的故事"
-                              : "有未看内容"}
-                          </span>
-                          <h2>{recommendation.series.title}</h2>
-                          <p>{progressLabel(recommendation.follow)} · 已核验至第 {recommendation.latestEpisode} 集</p>
-                          <div className="next-episode">
-                            从第 <b>{recommendation.nextEpisode}</b> 集继续
-                            <span>还有 {recommendation.unwatched} 集未看</span>
+                            <Verification series={candidate.series} stale={candidate.stale} />
                           </div>
-                          <PlaybackActions
-                            candidate={recommendation}
-                            busy={busy || needsLibraryRefresh}
-                            onOpen={openOfficial}
-                            onEdit={editProgress}
-                            onComplete={complete}
-                          />
-                          <Verification series={recommendation.series} stale={recommendation.stale} />
-                        </div>
-                      </section>
+                        )}
+                      />
                     ) : (
                       <div className="recommendation-empty" role="status">
                         <h2>{library?.follows.length ? "暂时没有可推荐的未看更新" : "先加入几部想追的国漫"}</h2>

@@ -1,0 +1,18 @@
+{
+  "projectId": "6747398532150002614",
+  "screenId": "813affee306a4cc485352b73448121ff",
+  "title": "动漫扑克牌抽卡交互 - 真实空间层叠版",
+  "retrievedDate": "2026-10-12",
+  "deviceType": "DESKTOP",
+  "originalDimensions": {
+    "width": 2560,
+    "height": 2048
+  },
+  "files": {
+    "html": "index.html",
+    "screenshot": "screen-original.png",
+    "thumbnail": "screen.png",
+    "referencedImage": "assets/image-01.png"
+  },
+  "note": "Stitch原始导出参考；HTML依赖Tailwind CDN，产品集成应使用真实追番数据和本地组件。"
+}
