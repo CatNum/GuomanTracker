@@ -59,3 +59,21 @@ test('one handler accepts A then rejects missing, empty and anonymous contexts b
     else process.env.TCB_ISANONYMOUS_USER = previousFlag;
   }
 });
+
+test('getCatalog requires trusted non-anonymous identity and never constructs the PG manager', async () => {
+  let managers = 0;
+  let reads = 0;
+  const handle = createPgUserHandler({
+    app: { auth: () => ({}) }, parseContext,
+    createManager: () => { managers++; throw new Error('PG must not be constructed'); },
+    loadSeed: async () => [], getCatalog: async () => { reads++; return { items: [{ id: 'public' }], live: true }; },
+  });
+  for (const context of [undefined, {}, contextFor('anonymous', 'true')]) {
+    assert.equal((await handle({ action: 'getCatalog', payload: {} }, context)).error.code, 'UNAUTHENTICATED');
+  }
+  assert.equal((await handle({ action: 'getCatalog', payload: { uid: 'forged' } }, contextFor('alice'))).error.code, 'INVALID_REQUEST');
+  assert.deepEqual(await handle({ action: 'getCatalog', payload: {} }, contextFor('alice')),
+    { ok: true, data: { items: [{ id: 'public' }], live: true } });
+  assert.equal(reads, 1);
+  assert.equal(managers, 0);
+});

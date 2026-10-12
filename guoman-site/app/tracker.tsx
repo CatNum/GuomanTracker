@@ -78,6 +78,7 @@ export default function Tracker({
   const [needsLibraryRefresh, setNeedsLibraryRefresh] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false),
     [accountEmail, setAccountEmail] = useState(""),
+    [catalogAccountKey, setCatalogAccountKey] = useState(""),
     [email, setEmail] = useState(""),
     [token, setToken] = useState(""),
     [challenge, setChallenge] = useState<EmailChallenge | null>(null),
@@ -131,6 +132,7 @@ export default function Tracker({
       );
       if (!verified || !current()) return null;
       accountUserId.current = verified.session.userId;
+      setCatalogAccountKey(verified.session.userId);
       setAccountEmail(verified.session.email || "");
       setLibrary(verified.library);
       return verified.library;
@@ -172,6 +174,7 @@ export default function Tracker({
         if (active && currentGeneration === generation.current) {
           setAccountEmail(verifiedAccountEmail);
           accountUserId.current = selected === "cloud" ? checked?.session?.userId || null : null;
+          setCatalogAccountKey(selected === "cloud" ? checked?.session?.userId || "" : "");
           modeRef.current = selected;
           setMode(selected);
           setLibrary(data);
@@ -408,6 +411,7 @@ export default function Tracker({
     const { library: data, session } = verified;
     setAccountEmail(session.email || "");
     accountUserId.current = session.userId;
+    setCatalogAccountKey(session.userId);
     generation.current++;
     markLibraryRefresh(false);
     modeRef.current = "cloud";
@@ -466,6 +470,7 @@ export default function Tracker({
       await endCloudSession((await cloudApp()).auth(), () => {
         generation.current++;
         accountUserId.current = null;
+        setCatalogAccountKey("");
         markLibraryRefresh(false);
         setPendingAccount(false);
         setNeedsLibraryRetry(false);
@@ -489,6 +494,7 @@ export default function Tracker({
       const clear = () => {
         generation.current++;
         accountUserId.current = null;
+        setCatalogAccountKey("");
         markLibraryRefresh(false);
         modeRef.current = "guest";
         setMode("guest");
@@ -654,6 +660,9 @@ export default function Tracker({
                 checkedAt={checkedAt}
                 embedded
                 followed={followed}
+                accountReady={mode === "cloud"}
+                accountKey={catalogAccountKey}
+                onLogin={() => setLoginOpen(true)}
                 onFollow={(series) => {
                   if (!busy && !needsLibraryRefreshRef.current)
                     void followCatalogSeries(

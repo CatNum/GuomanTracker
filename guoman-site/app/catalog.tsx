@@ -1,18 +1,43 @@
 'use client';
 import { z } from 'zod';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Play, Search, CalendarDays, Layers3, ExternalLink, Clock3, RefreshCw, ChevronLeft, ChevronRight, TvMinimal, X } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
 import Link from 'next/link';
 import { platforms, chinaDay, chinaDate, dayNames, scheduleText, upcoming, validSchedule, isSupportedPlatform, SUPPORTED_PLATFORMS, type Anime } from '@/lib/catalog';
 import { paginateCatalog } from '@/lib/catalog-pagination';
-export default function Catalog({initial,checkedAt,embedded=false,onFollow,followed=[]}:{initial:Anime[];checkedAt:string;embedded?:boolean;onFollow?:(series:Anime)=>void;followed?:string[]}){
+import { catalogTransport, loadCatalogData } from '@/lib/catalog-transport';
+export default function Catalog({initial,checkedAt,embedded=false,onFollow,followed=[],accountReady=true,accountKey='',onLogin}:{initial:Anime[];checkedAt:string;embedded?:boolean;onFollow?:(series:Anime)=>void;followed?:string[];accountReady?:boolean;accountKey?:string;onLogin?:()=>void}){
  const Content=embedded?'div':'main';
- const [items,setItems]=useState(initial.filter(a=>isSupportedPlatform(a.platform)));const [now,setNow]=useState(0);const [query,setQuery]=useState('');const [platform,setPlatform]=useState('all');const [status,setStatus]=useState('all');const [view,setView]=useState('all');const [day,setDay]=useState(-1);const [page,setPage]=useState(1);const [refresh,setRefresh]=useState(false);const [note,setNote]=useState('');
+ const [items,setItems]=useState(initial.filter(a=>isSupportedPlatform(a.platform)));const [now,setNow]=useState(0);const [query,setQuery]=useState('');const [platform,setPlatform]=useState('all');const [status,setStatus]=useState('all');const [view,setView]=useState('all');const [day,setDay]=useState(-1);const [page,setPage]=useState(1);const [refresh,setRefresh]=useState(false);const [note,setNote]=useState('');const requestId=useRef(0);const accountToken=useRef<{active:boolean}|null>(null);
+ useLayoutEffect(()=>{const token={active:true};accountToken.current=token;return()=>{token.active=false}},[accountReady,accountKey]);
  useEffect(()=>{const initial=window.setTimeout(()=>setNow(Date.now()),0);const t=setInterval(()=>setNow(Date.now()),60000);return()=>{clearTimeout(initial);clearInterval(t)}},[]);
- async function reload(){setRefresh(true);setNote('');try{const r=await fetch('/api/catalog');if(!r.ok)throw new Error();const data=z.object({items:z.array(z.object({id:z.string(),title:z.string(),platform:z.string(),url:z.string().url(),cover:z.string(),status:z.string(),episodes:z.string(),checkedAt:z.string(),source:z.string(),events:z.array(z.object({at:z.number(),label:z.string(),published:z.boolean(),delayed:z.boolean()})),days:z.array(z.number()).optional(),time:z.string().optional(),schedule:z.string().optional()})),live:z.boolean()}).parse(await r.json());if(data.items)setItems(data.items.filter(a=>isSupportedPlatform(a.platform)));setNote(data.live?'已同步官方国创更新日历':'官方日历暂不可用，正在展示最近核验的收录');}catch{setNote('同步未完成，仍可浏览已收录的作品。')}finally{setRefresh(false)}}
- useEffect(()=>{const initial=window.setTimeout(()=>{void reload()},0);return()=>clearTimeout(initial)},[]);
+ async function reload(){
+  const id=++requestId.current;const token=accountToken.current;const isCurrent=()=>id===requestId.current&&token?.active===true;setRefresh(true);setNote('');
+  try{
+   const data=await loadCatalogData({transport:catalogTransport,accountReady,call:async(action,payload)=>await import('@/lib/cloudbase-client').then(({cloudCall})=>cloudCall(action,payload))});
+   if(!isCurrent()||!data)return;
+   setItems(data.items.filter(a=>isSupportedPlatform(a.platform)));
+   setNote(data.live?'已同步官方国创更新日历':'官方日历暂不可用，正在展示最近核验的收录');
+  }catch{if(isCurrent())setNote('同步未完成，仍可浏览已收录的作品。');}
+  finally{if(isCurrent())setRefresh(false)}
+ }
+ function syncCalendar(){
+  if(catalogTransport==='cloudbase'&&!accountReady){setNote('已展示收录目录，请登录邮箱账号后同步官方日历。');onLogin?.();return;}
+  void reload();
+ }
+ useEffect(()=>{
+  const generationId=++requestId.current;
+  if(catalogTransport==='cloudbase'&&!accountReady){
+   const prompt=window.setTimeout(()=>{if(generationId===requestId.current){setRefresh(false);setNote('已收录目录，登录后可同步官方日历')}},0);
+   return()=>{clearTimeout(prompt)};
+  }
+  const initial=window.setTimeout(()=>{void reload()},0);
+  return()=>{clearTimeout(initial)};
+  // reload reads the current account readiness at the moment the effect runs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ },[accountReady,accountKey]);
  useEffect(()=>{
   const context=(document as Document & {modelContext?:{registerTool:(tool:unknown,options:{signal:AbortSignal})=>unknown}}).modelContext;
   if(!context?.registerTool)return;
@@ -56,7 +81,7 @@ export default function Catalog({initial,checkedAt,embedded=false,onFollow,follo
    <section className="overview" aria-label="收录概况"><div><span>已收录作品</span><strong>{items.length.toLocaleString()}<small>部</small></strong></div><div><span>有更新安排</span><strong>{scheduled.length}<small>部</small></strong></div><div><span>可用平台</span><strong>{SUPPORTED_PLATFORMS.length.toString().padStart(2,'0')}<small>个</small></strong></div><div className="overview-last"><TvMinimal size={23}/><p>只记录更新信息<small>观看体验，留给官方平台</small></p></div></section>
    <section id="catalog" className="catalog-section">
     <Tabs value={view} onValueChange={v=>{setView(v);setPage(1);setDay(-1)}}>
-     <div className="section-bar"><TabsList className="view-tabs" variant="line"><TabsTrigger value="all"><Layers3 size={17}/>国漫合集</TabsTrigger><TabsTrigger value="week"><CalendarDays size={17}/>本周更新</TabsTrigger></TabsList><button className="sync-button" onClick={reload} disabled={refresh}><RefreshCw size={14} className={refresh?'spinning':''}/>{refresh?'同步中':'同步日历'}</button></div>
+     <div className="section-bar"><TabsList className="view-tabs" variant="line"><TabsTrigger value="all"><Layers3 size={17}/>国漫合集</TabsTrigger><TabsTrigger value="week"><CalendarDays size={17}/>本周更新</TabsTrigger></TabsList><button className="sync-button" onClick={syncCalendar} disabled={refresh}><RefreshCw size={14} className={refresh?'spinning':''}/>{refresh?'同步中':'同步日历'}</button></div>
      <div className="platform-row" aria-label="筛选平台"><button className={platform==='all'?'platform active':'platform'} onClick={()=>{setPlatform('all');setPage(1)}}>全部平台<span>{items.length}</span></button>{Object.entries(platforms).map(([key,p])=><button key={key} disabled={!isSupportedPlatform(key)} title={isSupportedPlatform(key)?undefined:'暂不支持该平台'} className={`${platform===key?'platform active':'platform'} ${isSupportedPlatform(key)?'':'unsupported-platform'}`} onClick={()=>{setPlatform(key);setPage(1)}}><i style={{color:p.color,background:p.color+'18'}}>{p.letter}</i>{p.name}<span>{counts[key]}</span></button>)}</div>
      {view==='week'&&<div className="week-row"><button className={day===-1?'selected':''} onClick={()=>{setDay(-1);setPage(1)}}>全周</button>{[1,2,3,4,5,6,0].map(d=><button key={d} className={day===d?'selected':''} onClick={()=>{setDay(d);setPage(1)}}>{dayNames[d]}{today===d&&<small>今天</small>}</button>)}</div>}
      <div className="filter-row"><label className="search-box"><Search size={18}/><input value={query} onChange={e=>{setQuery(e.target.value);setPage(1)}} placeholder="搜索国漫名称…" aria-label="搜索国漫名称"/>{query&&<button aria-label="清除搜索" onClick={()=>{setQuery('');setPage(1)}}><X size={16}/></button>}</label><Select value={status} onValueChange={v=>{setStatus(v);setPage(1)}}><SelectTrigger className="status-select" aria-label="作品状态"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="all">全部状态</SelectItem><SelectItem value="ongoing">连载中</SelectItem><SelectItem value="finished">已完结</SelectItem><SelectItem value="unknown">状态待核验</SelectItem></SelectContent></Select><span className="result-count">共 {filtered.length} 部</span></div>

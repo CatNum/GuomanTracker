@@ -9,6 +9,7 @@
     "install:ci": "node scripts/install-ci.mjs",
     "dev": "next dev --webpack --hostname 127.0.0.1",
     "build": "next build --webpack",
+    "build:cloudbase": "node scripts/build-cloudbase-static.mjs",
     "start": "next start --hostname 127.0.0.1",
     "test": "node --experimental-strip-types --test tests/*.test.ts ../cloudbase/tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
