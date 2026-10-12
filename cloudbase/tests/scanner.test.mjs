@@ -22,6 +22,16 @@ test('canonical links deduplicate tracking and Tencent episode URLs while preser
   assert.deepEqual(parseOfficialUrl('https://m.mgtv.com/b/123/456.html?share=1'), { url: 'https://www.mgtv.com/b/123/456.html', platform: 'mgtv' });
 });
 
+test('unsupported platforms are excluded from scan queues and direct scans fail closed', async () => {
+  assert.deepEqual(selectDueTargets([
+    { seriesId: 'iqiyi', platform: 'iqiyi', source: 'user', nextScanAt: '2026-10-05T00:00:00.000Z' },
+    { seriesId: 'bili', platform: 'bilibili', source: 'user', nextScanAt: '2026-10-05T00:00:00.000Z' },
+  ], NOW).map(target => target.seriesId), ['bili']);
+  await assert.rejects(() => import('../shared/scanner.mjs').then(({ scanOfficialSeries }) => scanOfficialSeries({
+    platform: 'iqiyi', url: 'https://www.iqiyi.com/a_abc.html',
+  })), { code: 'UNSUPPORTED_PLATFORM' });
+});
+
 test('Bilibili release detection excludes future episodes and trailers rather than using total planned count', () => {
   const result = parseBilibili({ code: 0, result: { title: '测试国漫', total: 52, episodes: [
     { title: '1', pub_time: '2026-10-01 10:00:00', badge: '会员' },

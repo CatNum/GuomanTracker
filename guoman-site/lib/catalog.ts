@@ -1,3 +1,6 @@
+import { isSupportedPlatform, SUPPORTED_PLATFORMS } from "../../cloudbase/shared/platform-support.mjs";
+
+export { isSupportedPlatform, SUPPORTED_PLATFORMS };
 export type Anime = {
   id: string; title: string; platform: string; url: string; cover: string;
   status: string; episodes: string; checkedAt: string; source: string;

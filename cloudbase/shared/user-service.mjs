@@ -3,6 +3,7 @@ import { normalizeOfficialUrl } from './official-links.mjs';
 import { latestPublishedEpisode } from './published-episode.mjs';
 import { normalizeEpisodeProgress, validEpisodeProgress } from './episode-progress.mjs';
 import { CommitUnconfirmedError } from './pg-errors.mjs';
+import { isSupportedPlatform, pendingSeriesTitle } from './platform-support.mjs';
 
 export const COLLECTIONS = Object.freeze({ series: 'guoman_series', watch: 'guoman_watch_state', targets: 'guoman_monitor_targets' });
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -74,13 +75,12 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
           series: series.map(cleanSeries), follows: owned.map(cleanFollow),
         };
       } else if (event?.action === 'submit') {
-        const title = typeof payload.title === 'string' ? payload.title.trim() : '';
-        if (!title || title.length > 100 || /[\u0000-\u001f\u007f]/.test(title)) reject('INVALID_TITLE', '请填写 1 至 100 字的动漫名称。');
         let official;
         try {
           if (typeof payload.url !== 'string' || payload.url.length > 2048) throw new Error('Invalid URL size');
           official = normalizeOfficialUrl(payload.url);
         } catch { reject('INVALID_URL', '请填写支持的平台官方节目详情或播放链接（最多 2048 字符）。'); }
+        if (!isSupportedPlatform(official.platform)) reject('UNSUPPORTED_PLATFORM', '目前仅支持哔哩哔哩、腾讯视频和优酷。');
         const known = seedsByUrl.get(official.url);
         const seriesId = known?.id ?? official.id;
         data = await store.transaction(async (tx) => {
@@ -92,7 +92,7 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
           const limits = await readLimits(tx, uid, previous, target, date);
           const isNew = !stored && !known;
           if (isNew && (quota?.count ?? 0) >= 10) reject('RATE_LIMITED', '今天已补录 10 部新动漫，请明天再试。');
-          const series = { ...(stored ?? known ?? { id: seriesId, title, platform: official.platform, url: official.url, cover: '', status: 'unknown', episodes: '待核验', events: [], checkedAt: at, source: official.url }), ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}) };
+          const series = { ...(stored ?? known ?? { id: seriesId, title: pendingSeriesTitle(official), platform: official.platform, url: official.url, cover: '', status: 'unknown', episodes: '待核验', events: [], checkedAt: at, source: official.url, metadataPending: true }), ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}) };
           const follow = previous?.owner === uid && previous.kind === 'follow' ? normalizeEpisodeProgress(previous) : newFollow(uid, seriesId, at);
           if (!stored || !target) await tx.put(COLLECTIONS.series, seriesId, series);
           if (isNew) {
@@ -116,6 +116,7 @@ export function createUserService({ store, seed = [], now = () => new Date() }) 
             return { seriesId };
           }
           if (!series) reject('NOT_FOUND', '目录中没有这部动漫，请先补录官方链接。');
+          if (event.action !== 'unfollow' && !isSupportedPlatform(series.platform)) reject('UNSUPPORTED_PLATFORM', '目前仅支持哔哩哔哩、腾讯视频和优酷。');
           if (event.action === 'follow') {
             const target = await tx.get(COLLECTIONS.targets, seriesId);
             const limits = await readLimits(tx, uid, previous, target, date);

@@ -47,3 +47,15 @@ test('only known business codes prove rejection; service failure and unknown com
   assert.equal(isDefinitiveBusinessRejection(new CloudActionError('uncertain', 'TX_OUTCOME_UNKNOWN')), false);
   assert.equal(isDefinitiveBusinessRejection(new Error('network')), false);
 });
+
+test('unsupported platforms are correctable business rejections without an unknown-write lock', async () => {
+  const rejection = new CloudActionError('目前仅支持哔哩哔哩、腾讯视频和优酷。', 'UNSUPPORTED_PLATFORM');
+  let refreshes = 0;
+  const result = await runLibraryOperation(
+    async () => { throw rejection; },
+    async () => { refreshes++; throw new Error('must not refresh'); },
+    isDefinitiveBusinessRejection,
+  );
+  assert.deepEqual(result, { kind: 'rejected', error: rejection });
+  assert.equal(refreshes, 0);
+});

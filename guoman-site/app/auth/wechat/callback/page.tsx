@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { finishWechatLogin } from "@/lib/cloudbase-client";
 export default function WechatCallback() {
   const started = useRef(false);
@@ -18,9 +19,9 @@ export default function WechatCallback() {
     <main className="auth-result">
       <span className="eyebrow">国漫追更 · 微信登录</span>
       <h1>{message}</h1>
-      <a className="primary-action" href="/">
+      <Link className="primary-action" href="/">
         返回首页
-      </a>
+      </Link>
     </main>
   );
 }

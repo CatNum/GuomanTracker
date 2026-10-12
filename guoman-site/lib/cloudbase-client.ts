@@ -9,7 +9,7 @@ export const cloudConfigured = !!env && !/PLACEHOLDER|YOUR_|<|>/i.test(env);
 let appPromise: Promise<import("@cloudbase/js-sdk").app.App> | undefined;
 export async function cloudApp() {
   if (!cloudConfigured)
-    throw new Error("邮箱登录尚未配置。可以先体验本机演示。");
+    throw new Error("邮箱登录尚未配置。");
   return (appPromise ??= import("@cloudbase/js-sdk").then(
     ({ default: cloudbase }) =>
       cloudbase.init({
@@ -83,5 +83,4 @@ export async function finishWechatLogin(search: string) {
       );
     throw new Error("微信登录未完成，请检查身份源和回调域名配置");
   }
-  localStorage.removeItem("guoman-demo-enabled");
 }

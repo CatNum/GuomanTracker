@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   Bookmark,
   Check,
@@ -14,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import Catalog from "./catalog";
-import { platforms, type Anime } from "@/lib/catalog";
+import { isSupportedPlatform, platforms, type Anime } from "@/lib/catalog";
 import {
   watchingQueue,
   latestPublishedEpisode,
@@ -22,7 +23,6 @@ import {
   type WatchState,
   type WatchCandidate,
 } from "@/lib/watching";
-import { createLocalLibrary } from "@/lib/local-library";
 import {
   cloudApp,
   cloudCall,
@@ -30,11 +30,12 @@ import {
   getAuthenticatedSession,
   sendEmailCode,
 } from "@/lib/cloudbase-client";
-import { endCloudSession, followCatalogSeries, readDemoSelection } from "@/lib/account-actions";
+import { endCloudSession, followCatalogSeries } from "@/lib/account-actions";
 import { CloudActionError, emailErrorMessage, emailRetryDelayMs, inspectAuthenticatedSession, verifyEmailCode, type EmailChallenge } from "@/lib/cloud-auth";
 import { isDefinitiveBusinessRejection, runLibraryOperation } from "@/lib/library-operation";
+import { libraryBelongsToUser } from "@/lib/library-identity";
 
-type Mode = "guest" | "demo" | "cloud";
+type Mode = "guest" | "cloud";
 type View = "watch" | "library" | "catalog";
 const monitoringLabels = {
   queued: "等待核验",
@@ -66,6 +67,7 @@ export default function Tracker({
   const [dialogError, setDialogError] = useState("");
   const [needsLibraryRefresh, setNeedsLibraryRefresh] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false),
+    [accountEmail, setAccountEmail] = useState(""),
     [email, setEmail] = useState(""),
     [token, setToken] = useState(""),
     [challenge, setChallenge] = useState<EmailChallenge | null>(null),
@@ -94,28 +96,21 @@ export default function Tracker({
     return () => clearInterval(timer);
   }, [loginOpen, resendAt]);
   const call = useCallback(
-    async (
-      action: string,
-      payload: Record<string, unknown> = {},
-      selectedMode = mode,
-    ) =>
-      selectedMode === "demo"
-        ? createLocalLibrary(localStorage, initial).call(action, payload)
-        : cloudCall(action, payload),
-    [mode, initial],
+    (action: string, payload: Record<string, unknown> = {}) => cloudCall(action, payload),
+    [],
   );
   const reload = useCallback(
-    async (selectedMode: Mode = mode) => {
-      if (selectedMode === "guest") return null;
+    async () => {
+      if (modeRef.current === "guest") return null;
       const currentGeneration = generation.current;
-      const data = (await call("library", {}, selectedMode)) as Library;
-      if (mounted.current && currentGeneration === generation.current && selectedMode === modeRef.current) {
+      const data = (await call("library")) as Library;
+      if (mounted.current && currentGeneration === generation.current && modeRef.current === "cloud") {
         setLibrary(data);
         return data;
       }
       return null;
     },
-    [call, mode],
+    [call],
   );
   useEffect(() => {
     let active = true;
@@ -123,42 +118,44 @@ export default function Tracker({
     mounted.current = true;
     async function initialize() {
       const currentGeneration = generation.current;
-      let demoSelected = false;
       let authenticated = false;
       let sessionUncertain = false;
       let sessionError: unknown;
+      let verifiedAccountEmail = "";
       try {
-        const demo = readDemoSelection(localStorage);
-        demoSelected = demo.selected;
         const checked = cloudConfigured ? await inspectAuthenticatedSession(getAuthenticatedSession) : null;
+        if (!active || currentGeneration !== generation.current) return;
         authenticated = !!checked?.session;
+        verifiedAccountEmail = checked?.session?.email || "";
         sessionUncertain = checked?.uncertain === true;
         sessionError = checked?.error;
-        const selected: Mode = authenticated ? "cloud" : demoSelected ? "demo" : "guest";
-        const data = selected === "guest" ? null : (await call("library", {}, selected)) as Library;
+        const selected: Mode = authenticated ? "cloud" : "guest";
+        const data = selected === "guest" ? null : (await call("library")) as Library;
+        if (!active || currentGeneration !== generation.current) return;
+        if (selected === "cloud") {
+          const session = await getAuthenticatedSession();
+          if (!active || currentGeneration !== generation.current) return;
+          if (
+            !checked?.session ||
+            !session ||
+            session.userId !== checked.session.userId ||
+            !libraryBelongsToUser(data, checked.session.userId)
+          ) {
+            throw new Error("账号会话已变化，未加载其他账号记录，请重新加载当前账号记录。");
+          }
+        }
         if (active && currentGeneration === generation.current) {
+          setAccountEmail(verifiedAccountEmail);
           modeRef.current = selected;
           setMode(selected);
           setLibrary(data);
           if (sessionUncertain) {
             setPendingAccount(true);
             setNotice("账号状态暂未确认，可继续加载或退出账号：" + errorText(sessionError));
-          } else if (demo.error) setNotice(demo.error);
+          }
         }
       } catch (error) {
         if (active && currentGeneration === generation.current) {
-          if (demoSelected) {
-            try {
-              const data = (await call("library", {}, "demo")) as Library;
-              if (active && currentGeneration === generation.current) {
-                modeRef.current = "demo";
-                setMode("demo");
-                setLibrary(data);
-              }
-            } catch {
-              // Keep the guest view if local browser storage is unavailable.
-            }
-          }
           setNotice("账号数据加载未完成：" + errorText(error));
           if (authenticated || sessionUncertain) {
             setPendingAccount(true);
@@ -170,19 +167,20 @@ export default function Tracker({
           }
         }
       } finally {
-        if (active) setLoading(false);
+        if (active && currentGeneration === generation.current) setLoading(false);
       }
     }
     void initialize();
-    setNow(Date.now());
+    const initialNow = window.setTimeout(() => setNow(Date.now()), 0);
     const timer = setInterval(() => setNow(Date.now()), 60000);
     return () => {
       active = false;
       mounted.current = false;
       generationRef.current++;
       clearInterval(timer);
+      clearTimeout(initialNow);
     };
-    // 首次挂载恢复明确选择的账号或本机演示。
+    // 首次挂载恢复可信 SDK 账号会话。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const queue = useMemo(
@@ -190,7 +188,8 @@ export default function Tracker({
     [library, now],
   );
   const followed = library?.follows.map((x) => x.seriesId) || [];
-  const activeCount = library?.follows.filter((x) => !x.paused).length || 0;
+  const supportedIds = new Set((library?.series || []).filter((series) => isSupportedPlatform(series.platform)).map((series) => series.id));
+  const activeCount = library?.follows.filter((x) => !x.paused && supportedIds.has(x.seriesId)).length || 0;
 
   function markLibraryRefresh(value: boolean) {
     needsLibraryRefreshRef.current = value;
@@ -205,7 +204,7 @@ export default function Tracker({
     const current = () => mounted.current && generation.current === currentGeneration && modeRef.current === selectedMode;
     setBusy(true);
     try {
-      const data = await reload(selectedMode);
+      const data = await reload();
       if (!data || !current()) return;
       if (needsLibraryRefreshRef.current) {
         markLibraryRefresh(false);
@@ -229,7 +228,7 @@ export default function Tracker({
   ) {
     const selectedMode = modeRef.current;
     if (selectedMode === "guest") {
-      setNotice("请先邮箱登录，或选择本机演示后再保存追番。");
+      setNotice("请先邮箱登录，再保存追番。");
       return false;
     }
     if (needsLibraryRefreshRef.current) {
@@ -245,14 +244,14 @@ export default function Tracker({
     setDialogError("");
     try {
       const result = await runLibraryOperation(
-        () => call(action, payload, selectedMode),
+        () => call(action, payload),
         async () => {
           if (!current()) throw new Error("账号已切换");
-          const data = await reload(selectedMode);
+          const data = await reload();
           if (!data) throw new Error("账号已切换");
           return data;
         },
-        (error) => selectedMode === "demo" || isDefinitiveBusinessRejection(error),
+        isDefinitiveBusinessRejection,
       );
       if (!current()) return false;
       if (result.kind === "saved") {
@@ -280,24 +279,6 @@ export default function Tracker({
     } finally {
       mutationLock.current = false;
       if (current()) setBusy(false);
-    }
-  }
-  async function startDemo() {
-    setBusy(true);
-    try {
-      localStorage.setItem("guoman-demo-enabled", "yes");
-      generation.current++;
-      markLibraryRefresh(false);
-      modeRef.current = "demo";
-      setMode("demo");
-      await reload("demo");
-      setNotice(
-        "已进入本机演示。记录只保存在当前浏览器，补录不会实际触发云端扫描。",
-      );
-    } catch (error) {
-      setNotice(errorText(error));
-    } finally {
-      setBusy(false);
     }
   }
   function openLogin(event: React.MouseEvent<HTMLButtonElement>) {
@@ -339,11 +320,20 @@ export default function Tracker({
   }
   async function loadVerifiedLibrary() {
     const currentGeneration = generation.current;
+    const identity = await getAuthenticatedSession();
+    if (!mounted.current || currentGeneration !== generation.current) return;
+    if (!identity) throw new Error("当前没有有效的邮箱账号会话，请重新登录。");
     const data = await cloudCall("library", {}) as Library;
     if (!mounted.current || currentGeneration !== generation.current) return;
-    let demoMarkerError = false;
-    try { localStorage.removeItem("guoman-demo-enabled"); }
-    catch { demoMarkerError = true; }
+    const session = await getAuthenticatedSession();
+    if (!mounted.current || currentGeneration !== generation.current) return;
+    if (
+      !session ||
+      session.userId !== identity.userId ||
+      !libraryBelongsToUser(data, identity.userId)
+    )
+      throw new Error("账号会话已变化，请重新加载当前账号记录。");
+    setAccountEmail(session.email || "");
     generation.current++;
     markLibraryRefresh(false);
     modeRef.current = "cloud";
@@ -357,9 +347,7 @@ export default function Tracker({
     setLoginOpen(false);
     setChallenge(null);
     setToken("");
-    setNotice(demoMarkerError
-      ? "邮箱账号已登录，云端追番记录已加载；浏览器演示标记未能更新。"
-      : "邮箱账号已登录，云端追番记录已加载。");
+    setNotice("邮箱账号已登录，云端追番记录已加载。");
   }
   async function verifyCode() {
     if (authLock.current || !challenge) return;
@@ -410,6 +398,7 @@ export default function Tracker({
         setChallenge(null);
         setToken("");
         setEmail("");
+        setAccountEmail("");
         setLoginError("");
       });
     } catch (error) {
@@ -426,9 +415,6 @@ export default function Tracker({
         generation.current++;
         markLibraryRefresh(false);
         modeRef.current = "guest";
-        let demoMarkerError = false;
-        try { localStorage.removeItem("guoman-demo-enabled"); }
-        catch { demoMarkerError = true; }
         setMode("guest");
         setLibrary(null);
         setBusy(false);
@@ -438,10 +424,9 @@ export default function Tracker({
         setChallenge(null);
         setToken("");
         setEmail("");
+        setAccountEmail("");
         setLoginError("");
-        setNotice(demoMarkerError
-          ? "已退出当前账号；浏览器演示标记未能更新。"
-          : "已退出当前账号。");
+        setNotice("已退出当前账号。");
       };
       if (mode === "cloud" || pendingAccount || needsLibraryRetry)
         await endCloudSession((await cloudApp()).auth(), clear);
@@ -453,7 +438,7 @@ export default function Tracker({
     }
   }
   function openOfficial(series: Anime) {
-    if (mode !== "guest" && !needsLibraryRefreshRef.current)
+    if (mode !== "guest" && isSupportedPlatform(series.platform) && !needsLibraryRefreshRef.current)
       void perform(
         "open",
         { seriesId: series.id },
@@ -465,10 +450,12 @@ export default function Tracker({
     setSubmitOpen(true);
   }
   function editProgress(data: { series: Anime; follow: WatchState }) {
+    if (!isSupportedPlatform(data.series.platform)) return;
     setDialogError("");
     setEditing(data);
   }
   async function complete(series: Anime, follow: WatchState) {
+    if (!isSupportedPlatform(series.platform)) return;
     const latest = latestPublishedEpisode(series, now);
     if (
       latest === null ||
@@ -495,7 +482,7 @@ export default function Tracker({
   return (
     <div className="site-shell tracker-shell">
       <header className="site-header">
-        <a className="brand" href="/">
+        <Link className="brand" href="/">
           <span className="brand-icon">
             <Play size={19} fill="currentColor" />
           </span>
@@ -503,7 +490,7 @@ export default function Tracker({
             国漫<span>追更</span>
           </b>
           <span className="brand-en">GUOMAN TRACKER</span>
-        </a>
+        </Link>
         <div className="account-menu">
           {mode === "guest" ? (
             <>
@@ -515,14 +502,11 @@ export default function Tracker({
             </>
           ) : (
             <>
-              <span>
-                {mode === "demo"
-                  ? "本机演示"
-                  : library?.user.displayName || "我的账号"}
+              <span className="account-email">
+                {accountEmail || library?.user.displayName || "我的账号"}
               </span>
-              {mode === "demo" && <button className="secondary-action" onClick={openLogin} disabled={busy || loading}>{pendingAccount ? "继续加载" : "邮箱登录"}</button>}
               <button className="text-action" disabled={busy} onClick={logout}>
-                {mode === "demo" ? "退出演示" : "退出"}
+                退出
               </button>
             </>
           )}
@@ -552,11 +536,6 @@ export default function Tracker({
             补录动漫
           </button>
         </nav>
-        {mode === "demo" && (
-          <div className="demo-banner">
-            本机演示 · 数据仅保存在当前浏览器 · 不执行云端扫描
-          </div>
-        )}
         {notice && (
           <div role="status" className="notice">
             <span>{notice}</span>
@@ -649,18 +628,11 @@ export default function Tracker({
                         >
                           邮箱登录并保存进度
                         </button>
-                        <button
-                          className="secondary-action"
-                          onClick={startDemo}
-                          disabled={busy}
-                        >
-                          体验本机演示
-                        </button>
                       </div>
                       <small>
                         {cloudConfigured
                           ? "登录后记录会随邮箱账号保存。"
-                          : "邮箱登录等待上线配置，当前可以先浏览合集或体验本机演示。"}
+                          : "邮箱登录暂未配置，当前可以先浏览合集。"}
                       </small>
                     </div>
                   </section>
@@ -833,7 +805,7 @@ export default function Tracker({
                               );
                               return (
                                 <article
-                                  className="library-row"
+                                  className={`library-row ${isSupportedPlatform(series.platform) ? "" : "unsupported-platform"}`}
                                   key={series.id}
                                 >
                                   <div className="library-thumb">
@@ -855,6 +827,7 @@ export default function Tracker({
                                     <h2>
                                       {series.title}
                                       {follow.paused && <small>已暂停</small>}
+                                      {!isSupportedPlatform(series.platform) && <small>平台暂不可用</small>}
                                     </h2>
                                     <p>
                                       {platforms[series.platform]?.name} ·{" "}
@@ -876,19 +849,25 @@ export default function Tracker({
                                     />
                                   </div>
                                   <div className="library-actions">
-                                    <a
-                                      className="secondary-action"
-                                      href={series.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={() => openOfficial(series)}
-                                    >
-                                      官方播放
-                                      <ExternalLink size={13} />
-                                    </a>
+                                    {isSupportedPlatform(series.platform) ? (
+                                      <a
+                                        className="secondary-action"
+                                        href={series.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={() => openOfficial(series)}
+                                      >
+                                        官方播放
+                                        <ExternalLink size={13} />
+                                      </a>
+                                    ) : (
+                                      <button className="secondary-action" disabled title="暂不支持该平台">
+                                        平台暂不可用
+                                      </button>
+                                    )}
                                     <button
                                       className="secondary-action"
-                                      disabled={busy || needsLibraryRefresh}
+                                      disabled={busy || needsLibraryRefresh || !isSupportedPlatform(series.platform)}
                                       onClick={() =>
                                         editProgress({ series, follow })
                                       }
@@ -928,14 +907,14 @@ export default function Tracker({
         </p>
       </main>
       <footer>
-        <a className="footer-brand" href="/">
+        <Link className="footer-brand" href="/">
           国漫追更 <span>GUOMAN TRACKER</span>
-        </a>
+        </Link>
         <span>聚合信息 · 官方观看 · 不存储音视频</span>
       </footer>
       {loginOpen && (
         <DialogFrame title="邮箱验证码登录" onClose={closeLogin} locked={sending || verifying} returnFocusRef={loginTrigger}>
-          <p className="dialog-description">输入邮箱获取验证码。首次验证会建立账号；登录后读取该账号的云端追番记录。本机演示记录仍保留在浏览器中。</p>
+          <p className="dialog-description">输入邮箱获取验证码。首次验证会建立账号；登录后读取该账号的云端追番记录。</p>
           <form onSubmit={(event) => { event.preventDefault(); void (pendingAccount || needsLibraryRetry ? retryLibrary() : challenge ? verifyCode() : sendCode()); }}>
             <label>邮箱地址
               <input type="email" autoComplete="email" required value={email} disabled={sending || verifying || pendingAccount || needsLibraryRetry}
@@ -971,13 +950,11 @@ export default function Tracker({
           mode={mode}
           error={dialogError}
           onClose={() => setSubmitOpen(false)}
-          onSubmit={async (title, url) => {
+          onSubmit={async (url) => {
             const success = await perform(
               "submit",
-              { title, url },
-              mode === "demo"
-                ? "已在本机演示中补录并追番；上线配置后才会实际监控。"
-                : "已补录并加入追番，等待官方元数据核验。",
+              { url },
+              "已补录并加入追番，等待官方元数据核验。",
             );
             if (success) {
               setSubmitOpen(false);
@@ -1058,7 +1035,7 @@ function PlaybackActions({
 }: PlaybackProps) {
   return (
     <div className="action-row">
-      <a
+      {isSupportedPlatform(candidate.series.platform) ? <a
         className="primary-action"
         href={candidate.series.url}
         target="_blank"
@@ -1072,11 +1049,11 @@ function PlaybackActions({
           ? "续看"
           : "观看"}
         <ExternalLink size={14} />
-      </a>
+      </a> : <button className="primary-action" disabled>平台暂不可用</button>}
       {candidate.unwatched > 0 && (
         <button
           className="secondary-action"
-          disabled={busy}
+          disabled={busy || !isSupportedPlatform(candidate.series.platform)}
           onClick={() => onComplete(candidate.series, candidate.follow)}
         >
           <Check size={15} />
@@ -1085,7 +1062,7 @@ function PlaybackActions({
       )}
       <button
         className="text-action"
-        disabled={busy}
+        disabled={busy || !isSupportedPlatform(candidate.series.platform)}
         onClick={() =>
           onEdit({ series: candidate.series, follow: candidate.follow })
         }
@@ -1218,35 +1195,24 @@ function SubmissionDialog({
   busy: boolean;
   error: string;
   onClose: () => void;
-  onSubmit: (title: string, url: string) => Promise<void>;
+  onSubmit: (url: string) => Promise<void>;
 }) {
-  const [title, setTitle] = useState(""),
-    [url, setUrl] = useState("");
+  const [url, setUrl] = useState("");
   return (
     <DialogFrame title="补录想追的动漫" onClose={onClose}>
       <p className="dialog-description">
-        合集里还没有？提交名称和官方链接，我们会将它加入核验清单。这里只上传节目信息，不上传视频文件。
+        合集里还没有？提交官方链接后会加入待核验清单。这里只上传节目信息，不上传视频文件。
       </p>
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void onSubmit(title, url);
+          void onSubmit(url);
         }}
       >
         <label>
-          动漫名称
-          <input
-            autoFocus
-            required
-            maxLength={100}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="例如：你想追的国漫"
-          />
-        </label>
-        <label>
           官方播放或详情链接
           <input
+            autoFocus
             type="url"
             required
             value={url}
@@ -1255,13 +1221,10 @@ function SubmissionDialog({
           />
         </label>
         <p className="field-note">
-          支持哔哩哔哩、腾讯视频、优酷、爱奇艺、芒果TV。请先打开官网复制完整链接，暂不支持短链和搜索页。
+          支持哔哩哔哩、腾讯视频和优酷。请先打开官网复制完整链接，暂不支持短链和搜索页。
         </p>
         {mode === "guest" && (
-          <p className="field-note">请先登录或体验本机演示后提交。</p>
-        )}
-        {mode === "demo" && (
-          <p className="field-note">演示仅保存本机记录，不会启动实际扫描。</p>
+          <p className="field-note">请先登录后提交。</p>
         )}
         {error && (
           <p role="alert" className="form-error">

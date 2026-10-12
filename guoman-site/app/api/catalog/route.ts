@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import snapshot from '@/data/catalog.json';
-import type { Anime } from '@/lib/catalog';
+import { isSupportedPlatform, type Anime } from '@/lib/catalog';
 let retained:{expires:number;items:Anime[]}|null=null;
 export async function GET(){
- const baseline=snapshot.items as Anime[];
+ const baseline=(snapshot.items as Anime[]).filter(item=>isSupportedPlatform(item.platform));
  if(retained&&retained.expires>Date.now())return Response.json({items:retained.items,live:true});
  try{
   const r=await fetch('https://api.bilibili.com/pgc/web/timeline?types=4&before=6&after=6',{signal:AbortSignal.timeout(10000),headers:{'User-Agent':'GuomanTracker/1.0'}});

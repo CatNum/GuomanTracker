@@ -60,18 +60,18 @@ function throwResultError(value: unknown, context: string) {
 }
 
 /** Only a non-anonymous v3 session is a signed-in account. */
-export async function getAuthenticatedSession(auth: SessionAuth): Promise<{ userId: string } | null> {
+export async function getAuthenticatedSession(auth: SessionAuth): Promise<{ userId: string; email?: string } | null> {
   const result = await auth.getSession();
   throwResultError(result, "会话查询失败");
   const user = record(record(record(result)?.data)?.session)?.user;
   const details = record(user);
   return typeof details?.id === "string" && details.id.trim() && details.is_anonymous === false
-    ? { userId: details.id } : null;
+    ? { userId: details.id, ...(typeof details.email === "string" && details.email.trim() ? { email: details.email } : {}) } : null;
 }
 
 /** A failed session lookup leaves the SDK's persisted login state unknown. */
-export async function inspectAuthenticatedSession(check: () => Promise<{ userId: string } | null>): Promise<{
-  session: { userId: string } | null;
+export async function inspectAuthenticatedSession(check: () => Promise<{ userId: string; email?: string } | null>): Promise<{
+  session: { userId: string; email?: string } | null;
   uncertain: boolean;
   error: unknown;
 }> {
@@ -90,7 +90,7 @@ export async function sendEmailCode(auth: Pick<EmailAuth, "signInWithOtp">, emai
   return { email: normalized, verify: verify as EmailChallenge["verify"] };
 }
 
-export async function verifyEmailCode(auth: SessionAuth, challenge: EmailChallenge, token: string, onSessionMayExist?: () => void): Promise<{ userId: string }> {
+export async function verifyEmailCode(auth: SessionAuth, challenge: EmailChallenge, token: string, onSessionMayExist?: () => void): Promise<{ userId: string; email?: string }> {
   try {
     const result = await challenge.verify({ token: token.trim() });
     throwResultError(result, "验证码校验失败");

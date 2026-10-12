@@ -1,6 +1,7 @@
 import type { Anime } from "./catalog.ts";
 import { latestPublishedEpisode } from "../../cloudbase/shared/published-episode.mjs";
 import { completedEpisodeCount } from "../../cloudbase/shared/episode-progress.mjs";
+import { isSupportedPlatform } from "../../cloudbase/shared/platform-support.mjs";
 export { latestPublishedEpisode };
 
 export type WatchState = {
@@ -43,7 +44,7 @@ export function watchingQueue(
     unknown: WatchCandidate[] = [];
   for (const follow of follows) {
     const item = byId.get(follow.seriesId);
-    if (!item || follow.paused) continue;
+    if (!item || !isSupportedPlatform(item.platform) || follow.paused) continue;
     const latestEpisode = latestPublishedEpisode(item, now);
     const candidate = {
       series: item,

@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { latestPublishedEpisode, watchingQueue } from "../lib/watching.ts";
-import { createLocalLibrary } from "../lib/local-library.ts";
 import { consumeOAuthState } from "../lib/oauth-state.ts";
 import {
   endCloudSession,
@@ -90,6 +89,14 @@ test("通用观看队列区分未看、已追平、暂停和待核验", () => {
     ["d"],
   );
 });
+test("不支持的平台历史追番保留在库里但不进入观看推荐队列", () => {
+  const result = watchingQueue(
+    [{ ...anime("iqiyi"), platform: "iqiyi", url: "https://www.iqiyi.com/a_abc.html" }],
+    [follow("iqiyi")],
+    now,
+  );
+  assert.deepEqual(result, { ready: [], caughtUp: [], unknown: [] });
+});
 test("续看优先；过期排期不假定已经上线", () => {
   const result = watchingQueue(
     [anime("a"), { ...anime("b"), checkedAt: "2026-08-01T00:00:00Z" }],
@@ -119,43 +126,6 @@ test("计划更新的任意前缀不被误读为现在可看", () => {
     12,
   );
   assert.equal(latestPublishedEpisode(anime("a", "已更新至12集"), now), 12);
-});
-test("本机演示记录打开但不完成；进度与追番可持久化和移除", async () => {
-  const values = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      values.set(key, value);
-    },
-  };
-  const local = createLocalLibrary(storage, [anime("a")]);
-  const state = await local.call("follow", { seriesId: "a" });
-  await local.call("open", { seriesId: "a" });
-  let library = await local.call("library", {});
-  assert.equal(library.follows[0].currentEpisode, 0);
-  assert.ok(library.follows[0].lastOpenedAt);
-  await local.call("progress", {
-    seriesId: "a",
-    currentEpisode: 3,
-    episodeCompleted: false,
-    paused: false,
-    version: state.version,
-  });
-  library = await createLocalLibrary(storage, [anime("a")]).call("library", {});
-  assert.equal(library.follows[0].currentEpisode, 3);
-  await assert.rejects(
-    () =>
-      local.call("progress", {
-        seriesId: "a",
-        currentEpisode: 4,
-        episodeCompleted: true,
-        paused: false,
-        version: state.version,
-      }),
-    /版本|刷新/,
-  );
-  await local.call("unfollow", { seriesId: "a" });
-  assert.equal((await local.call("library", {})).follows.length, 0);
 });
 test("OAuth state 一次性消费；缺失、过期和不匹配均拒绝", () => {
   const record = JSON.stringify({
@@ -191,26 +161,16 @@ test("微信 SDK 返回退出错误时保留账号状态；成功才清除", asy
   );
   assert.equal(signedIn, false);
 });
-test("日历新增节目可以追番，未经服务器核验的集数不直接进入已更新列表", async () => {
-  const values = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      values.set(key, value);
-    },
-  };
-  const local = createLocalLibrary(storage, [anime("a")]);
+test("新目录节目只提交官方链接，不能把目录标题或集数写入补录", async () => {
   const fresh = {
     ...anime("b", "更新至5话"),
     url: "https://www.bilibili.com/bangumi/play/ss999999999",
   };
-  await followCatalogSeries(fresh, [anime("a")], (action, payload) =>
-    local.call(action, payload),
-  );
-  const library = await local.call("library", {});
-  assert.equal(library.follows.length, 1);
-  assert.equal(library.series[0].monitoring, "queued");
-  assert.equal(latestPublishedEpisode(library.series[0], now), null);
+  let invocation: [string, Record<string, unknown>] | undefined;
+  await followCatalogSeries(fresh, [anime("a")], async (action, payload) => {
+    invocation = [action, payload];
+  });
+  assert.deepEqual(invocation, ["submit", { url: fresh.url }]);
 });
 
 test("最新一集未看完仍可续看，标为看完后才追平", () => {
@@ -226,79 +186,4 @@ test("最新一集未看完仍可续看，标为看完后才追平", () => {
   );
   assert.equal(completed.ready.length, 0);
   assert.equal(completed.caughtUp[0].nextEpisode, 13);
-});
-
-test("本机旧秒数记录转成下一集未看完；保存后仅保留集数状态", async () => {
-  let saved = JSON.stringify({
-    user: { uid: "local-demo", displayName: "本机演示" },
-    series: [anime("a")],
-    follows: [
-      {
-        seriesId: "a",
-        watchedEpisode: 3,
-        positionSeconds: 90,
-        paused: false,
-        version: 1,
-        updatedAt: new Date(now).toISOString(),
-      },
-    ],
-  });
-  const storage = {
-    getItem: () => saved,
-    setItem: (_key: string, value: string) => {
-      saved = value;
-    },
-  };
-  const local = createLocalLibrary(storage, []);
-  const state = (await local.call("library", {})).follows[0];
-  assert.equal(state.currentEpisode, 4);
-  assert.equal(state.episodeCompleted, false);
-  await local.call("progress", {
-    seriesId: "a",
-    currentEpisode: 4,
-    episodeCompleted: true,
-    paused: false,
-    version: 1,
-  });
-  const persisted = JSON.parse(saved).follows[0];
-  assert.equal(persisted.currentEpisode, 4);
-  assert.equal(persisted.episodeCompleted, true);
-  assert.equal("positionSeconds" in persisted, false);
-  assert.equal("watchedEpisode" in persisted, false);
-});
-
-test("本机拒绝零集已看完、无效完成状态和超出已发布的集数", async () => {
-  let saved: string | null = null;
-  const local = createLocalLibrary(
-    {
-      getItem: () => saved,
-      setItem: (_key: string, value: string) => {
-        saved = value;
-      },
-    },
-    [anime("a")],
-  );
-  await local.call("follow", { seriesId: "a" });
-  const payload = {
-    seriesId: "a",
-    currentEpisode: 1,
-    episodeCompleted: false,
-    paused: false,
-    version: 1,
-  };
-  for (const patch of [
-    { currentEpisode: 0, episodeCompleted: true },
-    { currentEpisode: 13 },
-    { episodeCompleted: "yes" },
-    { currentEpisode: 1.5 },
-  ]) {
-    await assert.rejects(() =>
-      local.call("progress", { ...payload, ...patch }),
-    );
-  }
-  await local.call("progress", payload);
-  assert.equal(
-    (await local.call("library", {})).follows[0].episodeCompleted,
-    false,
-  );
 });

@@ -4,7 +4,7 @@
 
 **Goal:** 用户补录缺失动漫、微信登录、管理追番和进度，并从「现在看什么」找到尚未看完的节目。
 
-**Architecture:** EdgeOne Pages 托管 Next.js；CloudBase 身份验证和云函数负责账号、数据库与定时元数据扫描。没有配置时提供明确的本机演示入口，云服务失败不得自动切换演示。
+**Architecture:** EdgeOne Pages 托管 Next.js；CloudBase 身份验证和云函数负责账号、数据库与定时元数据扫描。没有配置时页面只显示访客浏览界面，云服务失败保留当前状态。
 
 **Tech Stack:** Next.js、React、CloudBase Web SDK、CloudBase Node SDK、Node 内置测试。
 
@@ -26,7 +26,7 @@
 
 ## 二、任务和验收
 
-- [x] 根执行器：写「现在看什么」领域测试，覆盖已发布/未来排期、已看/未看/暂停、未知进度、重复打开不自动完成；实现领域计算、登录与演示数据接口。
+- [x] 根执行器：写追番领域测试，覆盖已发布/未来排期、已看/未看/暂停、未知进度、重复打开不自动完成；实现领域计算、邮箱登录与隔离存储测试后端。
 - [x] 后端独立任务：`cloudbase/functions/guoman-user/`、`cloudbase/shared/user-service.mjs`、`cloudbase/shared/cloudbase-store.mjs`、`cloudbase/tests/user-service.test.mjs`；先失败测试再实现身份隔离、去重、限流、观看更新并发版本。
 - [x] 扫描独立任务：`cloudbase/shared/official-links.mjs`、`cloudbase/shared/scanner.mjs`、`cloudbase/functions/guoman-scan/`、`cloudbase/tests/scanner.test.mjs`；先失败测试再实现白名单、限量扫描、退避和可靠元数据解析；提供管理员种子导入脚本，不提供客户端扫描入口。
 - [x] 根执行器：Next 标准构建、CloudBase SDK 微信 OAuth 回调与一次性 state 校验、个性化界面和补录表单；保留国漫合集检索。
@@ -36,7 +36,7 @@
 
 ## 三、验收重点
 
-个人数据不通过客户端提供的 UID 读取；重复节目补录不产生重复监控；进度不会因点击播放自动增加；尚未发布的排期不会出现于可看更新；配置缺失可审查演示但不能假装微信登录成功；扫描不会下载媒体，不会访问非官网地址。
+个人数据不通过客户端提供的 UID 读取；重复节目补录不产生重复监控；进度不会因点击播放自动增加；尚未发布的排期不会出现于可看更新；配置缺失时不伪造用户会话；扫描不会下载媒体，不会访问非官网地址。
 
 ## 四、实施记录
 

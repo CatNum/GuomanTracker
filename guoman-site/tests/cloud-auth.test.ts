@@ -9,7 +9,7 @@ import {
   emailErrorMessage,
   emailRetryDelayMs,
 } from "../lib/cloud-auth.ts";
-import { endCloudSession, readDemoSelection } from "../lib/account-actions.ts";
+import { endCloudSession } from "../lib/account-actions.ts";
 
 const session = { data: { session: { user: { id: "user-1", is_anonymous: false } } }, error: null };
 
@@ -112,6 +112,13 @@ test("正式会话调用云函数仍验证业务信封", async () => {
   );
 });
 
+test("可信 SDK 会话完整提供邮箱用于账号展示", async () => {
+  const authenticated = await getAuthenticatedSession({ getSession: async () => ({
+    data: { session: { user: { id: "user-1", email: "long.address@example.com", is_anonymous: false } } }, error: null,
+  }) });
+  assert.deepEqual(authenticated, { userId: "user-1", email: "long.address@example.com" });
+});
+
 test("验证码回调成功后会话查询失败仍标记待恢复，可重试而无需再次发码", async () => {
   let accepted = false;
   let sends = 0;
@@ -182,17 +189,4 @@ test("SDK 验证回调返回错误但已持久化会话时仍标记待恢复", a
     "123456", () => { accepted = true; },
   ), /late failure/);
   assert.equal(accepted, true);
-});
-
-test("浏览器存储拒绝读取演示标记时恢复访客且不修改本机记录", () => {
-  let writes = 0;
-  const storage = {
-    getItem: () => { throw new DOMException("blocked", "SecurityError"); },
-    setItem: () => { writes++; },
-    removeItem: () => { writes++; },
-  };
-  const selection = readDemoSelection(storage);
-  assert.equal(selection.selected, false);
-  assert.match(selection.error || "", /存储/);
-  assert.equal(writes, 0);
 });

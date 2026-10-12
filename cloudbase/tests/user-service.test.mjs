@@ -65,6 +65,28 @@ test('known official links preserve catalog identifiers and repeated submissions
   assert.equal((await call('bob', 'library')).data.follows.length, 1);
 });
 
+test('official-link-only submissions preserve known titles and use a pending title for new shows', async () => {
+  const { call } = setup();
+  const known = await call('alice', 'submit', { url: seed[0].url });
+  assert.equal(known.data.series.title, '已收录国漫');
+  const fresh = await call('alice', 'submit', { url: 'https://www.bilibili.com/bangumi/play/ss456' });
+  assert.equal(fresh.data.series.title, 'B站待核验节目 ss456');
+  assert.equal(fresh.data.series.episodes, '待核验');
+  assert.equal(fresh.data.series.monitoring, 'queued');
+});
+
+test('unsupported platforms reject submit, follow, progress, and open while unfollow remains available', async () => {
+  const iqiyi = { id: 'iqiyi-seed', title: '旧平台节目', platform: 'iqiyi', url: 'https://www.iqiyi.com/a_abc.html' };
+  const { call, store } = setup();
+  const service = createUserService({ store, seed: [...seed, iqiyi] });
+  const invoke = (action, payload) => service({ action, payload }, { uid: 'alice' });
+  for (const [action, payload] of [
+    ['submit', { url: iqiyi.url }], ['follow', { seriesId: iqiyi.id }],
+    ['progress', { seriesId: iqiyi.id }], ['open', { seriesId: iqiyi.id }],
+  ]) assert.equal((await invoke(action, payload)).error.code, 'UNSUPPORTED_PLATFORM');
+  assert.equal((await invoke('unfollow', { seriesId: iqiyi.id })).ok, true);
+});
+
 test('daily submission limit is atomic, excludes duplicates and resets in China time', async () => {
   const { call, store, advance } = setup();
   const results = await Promise.all(Array.from({ length: 12 }, (_, index) => call('alice', 'submit', { title: `补录${index}`, url: `https://www.bilibili.com/bangumi/play/ss${1000 + index}` })));
@@ -116,8 +138,6 @@ test('opening official playback updates timestamp without counting a completed e
 test('validation errors and internal failures use safe envelopes', async () => {
   const { call } = setup();
   assert.equal((await call('alice', 'submit', { title: '非法', url: 'https://example.com/ss1' })).error.code, 'INVALID_URL');
-  assert.equal((await call('alice', 'submit', { title: ' ', url: 'https://www.bilibili.com/bangumi/play/ss100' })).error.code, 'INVALID_TITLE');
-  assert.equal((await call('alice', 'submit', { title: '名'.repeat(101), url: 'https://www.bilibili.com/bangumi/play/ss100' })).error.code, 'INVALID_TITLE');
   assert.equal((await call('alice', 'submit', { title: '超长链接', url: `https://www.bilibili.com/bangumi/play/ss100?tracking=${'x'.repeat(2048)}` })).error.code, 'INVALID_URL');
   assert.equal((await call('alice', 'follow', { seriesId: 'unknown' })).error.code, 'NOT_FOUND');
   const service = createUserService({ store: { listFollows: async () => { throw new Error('SECRET_INTERNAL'); } }, seed });

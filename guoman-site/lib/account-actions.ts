@@ -1,10 +1,5 @@
 import type { Anime } from "./catalog.ts";
-
-/** A storage policy error must not keep account recovery loading forever. */
-export function readDemoSelection(storage: Pick<Storage, "getItem">): { selected: boolean; error: string | null } {
-  try { return { selected: storage.getItem("guoman-demo-enabled") === "yes", error: null }; }
-  catch { return { selected: false, error: "浏览器存储不可用，无法恢复本机演示记录。" }; }
-}
+import { isSupportedPlatform } from "../../cloudbase/shared/platform-support.mjs";
 
 /** 退出成功才清理界面，SDK resolve 的 error 也属于失败。 */
 export async function endCloudSession(
@@ -23,7 +18,9 @@ export async function followCatalogSeries<T>(
   known: Anime[],
   call: (action: string, payload: Record<string, unknown>) => Promise<T>,
 ) {
+  if (!isSupportedPlatform(series.platform))
+    throw Object.assign(new Error("目前仅支持哔哩哔哩、腾讯视频和优酷。"), { code: "UNSUPPORTED_PLATFORM" });
   return known.some((item) => item.id === series.id)
     ? call("follow", { seriesId: series.id })
-    : call("submit", { title: series.title, url: series.url });
+    : call("submit", { url: series.url });
 }

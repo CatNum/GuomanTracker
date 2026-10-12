@@ -1,5 +1,5 @@
 function invalid() {
-  const error = new Error('请使用哔哩哔哩、腾讯视频、优酷、爱奇艺或芒果 TV 的官方节目详情/播放 HTTPS 链接。');
+  const error = new Error('请使用哔哩哔哩、腾讯视频或优酷的官方节目详情/播放 HTTPS 链接。');
   error.code = 'INVALID_URL';
   return error;
 }

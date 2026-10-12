@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { normalizeOfficialUrl } from './official-links.mjs';
+import { isSupportedPlatform } from './platform-support.mjs';
 import { latestPublishedEpisode } from './published-episode.mjs';
 
 const HOUR = 60 * 60 * 1000;
@@ -126,6 +127,7 @@ export function parseOfficialHtml(html) {
 export async function scanOfficialSeries(target, { now = new Date(), ...options } = {}) {
   const normalized = normalizeOfficialUrl(target.url);
   if (target.platform && normalized.platform !== target.platform) throw fault('INVALID_URL', '监控平台与官网链接不匹配。');
+  if (!isSupportedPlatform(normalized.platform)) throw fault('UNSUPPORTED_PLATFORM', '目前仅支持哔哩哔哩、腾讯视频和优酷。');
   if (normalized.platform === 'bilibili') {
     const id = new URL(normalized.url).pathname.match(/\/(ss|ep)(\d+)$/u);
     const url = `https://api.bilibili.com/pgc/view/web/season?${id[1] === 'ss' ? 'season_id' : 'ep_id'}=${id[2]}`;
@@ -139,7 +141,14 @@ export async function scanOfficialSeries(target, { now = new Date(), ...options 
 }
 
 export function selectDueTargets(targets, now = new Date(), limit = MAX_SCAN) {
-  return targets.filter(target => ['user', 'hot'].includes(target.source) && (!target.nextScanAt || Date.parse(target.nextScanAt) <= +now) && (!target.leaseUntil || Date.parse(target.leaseUntil) <= +now))
+  return targets.filter(target => {
+    if (!['user', 'hot'].includes(target.source)) return false;
+    let platform = target.platform;
+    if (!platform && target.url) {
+      try { platform = normalizeOfficialUrl(target.url).platform; } catch { return false; }
+    }
+    return (!platform || isSupportedPlatform(platform)) && (!target.nextScanAt || Date.parse(target.nextScanAt) <= +now) && (!target.leaseUntil || Date.parse(target.leaseUntil) <= +now);
+  })
     .sort((a, b) => Number(b.source === 'user') - Number(a.source === 'user') || Date.parse(a.nextScanAt || '1970-01-01') - Date.parse(b.nextScanAt || '1970-01-01') || String(a.seriesId).localeCompare(String(b.seriesId)))
     .slice(0, Math.min(MAX_SCAN, Math.max(0, Number(limit) || 0)));
 }
@@ -194,13 +203,14 @@ export function authorizeScanner(event, userInfo, secret) {
   return timingSafeEqual(Buffer.from(message.scanKey), Buffer.from(secret));
 }
 
-/** Creates explicit hot-list targets without demoting previously submitted user targets. */
+/** 创建明确指定的热门扫描目标，并保留用户已经提交的目标优先级。 */
 export function seedHotTargets(series, existing = [], now = new Date()) {
   if (!Array.isArray(series) || series.length > MAX_HOT) throw fault('SEED_LIMIT', '热门扫描种子最多 30 个。');
   const userIds = new Set(existing.filter(target => target.source === 'user').map(target => target.seriesId));
   const unique = new Map();
   for (const item of series) {
     const normalized = normalizeOfficialUrl(item.url);
+    if (!isSupportedPlatform(normalized.platform)) continue;
     const seriesId = item.id || normalized.id;
     if (!userIds.has(seriesId)) unique.set(seriesId, { seriesId, url: normalized.url, platform: normalized.platform, source: 'hot', status: 'queued', nextScanAt: now.toISOString(), failureCount: 0 });
   }
