@@ -61,6 +61,8 @@ export default function Tracker({
   const [mode, setMode] = useState<Mode>("guest"),
     [library, setLibrary] = useState<Library | null>(null),
     [view, setView] = useState<View>("library");
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [statsHelpOpen, setStatsHelpOpen] = useState(false);
   const [listFilter, setListFilter] = useState<WatchFilter>("all");
   const [listSort, setListSort] = useState<FollowSort>("priority");
   const [busy, setBusy] = useState(false),
@@ -95,6 +97,14 @@ export default function Tracker({
   const mounted = useRef(true);
   const loginTrigger = useRef<HTMLButtonElement | null>(null);
   const draggedSeriesId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!statsHelpOpen) return;
+    function closeStatsHelp(event: KeyboardEvent) {
+      if (event.key === "Escape") setStatsHelpOpen(false);
+    }
+    document.addEventListener("keydown", closeStatsHelp);
+    return () => document.removeEventListener("keydown", closeStatsHelp);
+  }, [statsHelpOpen]);
   useEffect(() => {
     if (!loginOpen || !resendAt || Date.now() >= resendAt) return;
     const timer = setInterval(() => {
@@ -577,8 +587,13 @@ export default function Tracker({
           )}
         </div>
       </header>
-      <main>
-        <nav className="tracker-nav" aria-label="主导航">
+      <main className={`tracker-workspace ${sidebarExpanded ? "sidebar-expanded" : "sidebar-collapsed"}`}>
+        <aside className="tracker-sidebar">
+        <div className="sidebar-panel">
+        <button className="sidebar-toggle" type="button" aria-expanded={sidebarExpanded} aria-controls="tracker-navigation" aria-label={sidebarExpanded ? "收起导航" : "展开导航"} title={sidebarExpanded ? "收起导航" : "展开导航"} onClick={() => setSidebarExpanded((expanded) => !expanded)}>
+          <ListVideo size={18} /><span>{sidebarExpanded ? "收起导航" : "展开导航"}</span>
+        </button>
+        <nav className="tracker-nav" id="tracker-navigation" aria-label="主导航">
           {(
             [
               ["library", "我的追番", Bookmark],
@@ -587,19 +602,31 @@ export default function Tracker({
           ).map(([key, label, Icon]) => (
             <button
               key={key}
+              type="button"
               aria-current={view === key ? "page" : undefined}
+              aria-label={label}
+              title={label}
               className={view === key ? "active" : ""}
-              onClick={() => setView(key)}
+              onClick={() => {
+                setView(key);
+                if (window.matchMedia("(max-width: 700px)").matches) setSidebarExpanded(false);
+              }}
             >
               <Icon size={17} />
-              {label}
+              <span>{label}</span>
             </button>
           ))}
-          <button className="submit-entry" onClick={openSubmission}>
+          <button type="button" className="submit-entry" aria-label="国漫补录" title="国漫补录" onClick={() => {
+            openSubmission();
+            if (window.matchMedia("(max-width: 700px)").matches) setSidebarExpanded(false);
+          }}>
             <Plus size={17} />
-            补录动漫
+            <span>国漫补录</span>
           </button>
         </nav>
+        </div>
+        </aside>
+        <div className="tracker-content">
         {notice && (
           <div role="status" className="notice">
             <span>{notice}</span>
@@ -688,25 +715,6 @@ export default function Tracker({
                   </section>
                 ) : (
                   <>
-                    <div className="watch-stats" aria-label="追番统计与筛选">
-                      {([
-                        ["week", weekCount, "本周更新未看"],
-                        ["unwatched", queue.ready.length, "有未看内容"],
-                        ["active", activeCount, "正在追番"],
-                        ["caught-up", queue.caughtUp.length, "已追平"],
-                      ] as const).map(([key, count, label]) => (
-                        <button
-                          key={key}
-                          type="button"
-                          aria-pressed={listFilter === key}
-                          className={listFilter === key ? "selected" : ""}
-                          onClick={() => setListFilter(listFilter === key ? "all" : key)}
-                        >
-                          <strong>{count}</strong>
-                          <span>{label}</span>
-                        </button>
-                      ))}
-                    </div>
                     {recommendation ? (
                       <section className="featured-watch" aria-label="优先推荐观看">
                         <div className="featured-cover">
@@ -749,6 +757,31 @@ export default function Tracker({
                         {!library?.follows.length && <button className="secondary-action" onClick={() => setView("catalog")}>浏览国漫合集</button>}
                       </div>
                     )}
+                    <div className="watch-stats-wrap">
+                      <div className="watch-stats-help" onMouseEnter={() => setStatsHelpOpen(true)} onMouseLeave={() => setStatsHelpOpen(false)}>
+                        <button type="button" aria-label="追番统计说明" aria-describedby="watch-stats-tooltip" aria-expanded={statsHelpOpen} onFocus={() => setStatsHelpOpen(true)} onBlur={() => setStatsHelpOpen(false)}>?</button>
+                        <span className={`watch-stats-tooltip ${statsHelpOpen ? "visible" : ""}`} id="watch-stats-tooltip" role="tooltip">点击可以筛选对应内容</span>
+                      </div>
+                      <div className="watch-stats" aria-label="追番统计与筛选">
+                        {([
+                          ["week", weekCount, "本周更新未看"],
+                          ["unwatched", queue.ready.length, "有未看内容"],
+                          ["active", activeCount, "正在追番"],
+                          ["caught-up", queue.caughtUp.length, "已追平"],
+                        ] as const).map(([key, count, label]) => (
+                          <button
+                            key={key}
+                            type="button"
+                            aria-pressed={listFilter === key}
+                            className={listFilter === key ? "selected" : ""}
+                            onClick={() => setListFilter(listFilter === key ? "all" : key)}
+                          >
+                            <strong>{count}</strong>
+                            <span>{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <section className="library-section" aria-labelledby="follow-list-title">
                       <div className="section-heading library-section-heading">
                         <h2 id="follow-list-title">我的追番</h2>
@@ -845,6 +878,7 @@ export default function Tracker({
           播放在官方平台进行，会员与地区权限以平台为准。进度由你确认；手机链接是否唤起
           App 取决于平台支持。
         </p>
+        </div>
       </main>
       <footer>
         <Link className="footer-brand" href="/">
