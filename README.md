@@ -3,7 +3,8 @@
 ## 重点
 
 - **当前源码版本 0.2.2**：邮箱验证码是账号入口；追番、手动观看进度和合集浏览已实现，目前仅开放哔哩哔哩、腾讯视频与优酷。
-- **部署状态**：0.2.2 前端已于 2026-10-12 从业务源码提交 `0f74c69` 发布到 [正式站点](https://guoman-tracker-qukvrr5l.edgeone.dev/)；PG 私有存储迁移与 `guoman-user` 用户云函数已上线。真实邮箱已验证追番和进度保存、刷新恢复、同邮箱重登恢复及双邮箱隔离。此前自动测试追番已清理，用户本次记录仍保留。扫描云函数尚未接入 PG，未部署。仓库模板仍使用公开占位符，不代表本地环境未配置。
+- **部署架构**：普通 Next.js 构建保留 EdgeOne 兼容能力；CloudBase 静态网页已发布到[既有共享域名](https://guoman-d1goxm3hhb53752a4-1315191445.tcloudbaseapp.com/)，文件、资源、真实邮箱登录和刷新恢复均已验收。`guoman-user` 用户云函数于 2026-10-12 15:42:30（北京时间）部署并确认 `Active`，函数编号与原配置保留。旧 EdgeOne 三小时临时预览域名只作历史记录。
+- **账号验收**：新域名真实邮箱登录后，原五部追番、优先级顺序和师兄啊师兄第 161 集已看完状态均恢复；整页刷新后会话与记录仍在。筛选、目录实时同步和推荐显示也已验证。未新增或删除追番，未修改优先级和观看进度。扫描云函数尚未接入 PG，未部署。仓库模板使用公开占位符，不代表本地环境未配置。
 - **源码统一维护**：网站源码位于 `guoman-site/`，由当前 GitHub
   仓库直接跟踪；具体变更记录见 [CHANGELOG](CHANGELOG.md)。
 - **收录范围**：当前快照共 3,250 个季或作品条目；
@@ -11,9 +12,9 @@
 
 ## 一、网站与功能
 
-[旧版 Sites 网站](https://guoman-update-hub.yxl19991104.chatgpt.site/)仍为 0.1.0，仅所有者可访问。
-0.2.0 改用 EdgeOne Pages 托管 Next.js，CloudBase 负责身份与个人数据；限量扫描仍待接入。
-部署配置与所需占位信息见 [部署说明](docs/deployment.md)。
+[旧版 Sites 网站](https://guoman-update-hub.yxl19991104.chatgpt.site/)仍为 0.1.0，仅所有者可访问。EdgeOne 曾承载 Next.js 预览；其默认三小时临时域名只作历史记录。
+当前 Next.js 源码支持普通 `.next` 构建和 CloudBase 静态导出。CloudBase 托管页面调用现有邮箱认证与 `guoman-user`（用户云函数）；登录后通过可信目录动作同步官方日历，游客先浏览内置快照。限量扫描仍未接入 PG。
+构建与部署步骤见 [部署说明](docs/deployment.md)。
 
 网站支持按名称、平台、作品状态和星期筛选，展示官方已公布排期，
 并通过链接跳转到视频平台。邮箱账号追番与观看进度的云端基本闭环已在真实邮箱会话中验收，
@@ -43,6 +44,7 @@ npm run dev
 npm test
 npm run typecheck
 npm run build
+node -e "require('@next/env').loadEnvConfig(process.cwd(), false); require('node:child_process').execFileSync('npm', ['run', 'build:cloudbase'], {stdio: 'inherit', env: process.env})"
 npm run cloudbase:prepare
 ```
 
@@ -52,7 +54,9 @@ npm run cloudbase:prepare
 提交 commit，并推送至 GitHub；在版本记录中说明实际功能与限制。
 
 GitHub Actions 在 push / PR 时检查测试、类型、Next.js 构建和云函数打包。
-EdgeOne 可连接当前仓库，在配置上线后按分支自动构建。
+`npm run build` 保留普通 Next.js 构建；CloudBase 静态构建前应从本地忽略的
+`.env.local` 加载公开环境配置，并运行 `npm run build:cloudbase`。
+EdgeOne 构建能力作为兼容路径保留，旧临时预览域名不作为当前正式站点。
 旧 Sites 配置与 `.sites-history/guoman-source.git`（本地发布历史备份）保留供恢复，
 不再作为本版本运行或部署入口，不在网站目录重建嵌套 Git 仓库。
 
