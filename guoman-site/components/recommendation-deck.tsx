@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, Layers3, X } from "lucide-react";
 import type { WatchCandidate } from "@/lib/watching";
 import { validDeckSelection, visibleDeckIds } from "@/lib/recommendation-deck";
@@ -8,46 +8,80 @@ import styles from "./recommendation-deck.module.css";
 
 type Props = {
   candidates: WatchCandidate[];
-  renderDetails: (candidate: WatchCandidate) => ReactNode;
+  renderDetails: (candidate: WatchCandidate, onEditProgress: (edit: () => void) => void) => ReactNode;
 };
+
+function DetailsContent({
+  candidate,
+  renderDetails,
+  onEditProgress,
+}: {
+  candidate: WatchCandidate;
+  renderDetails: Props["renderDetails"];
+  onEditProgress: (edit: () => void) => void;
+}) {
+  return renderDetails(candidate, onEditProgress);
+}
 
 export default function RecommendationDeck({ candidates, renderDetails }: Props) {
   const ids = useMemo(() => candidates.map((candidate) => candidate.series.id), [candidates]);
   const [selectedId, setSelectedId] = useState(ids[0] || "");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   // A render-phase adjustment prevents a removed or caught-up candidate from
   // remaining selected while avoiding a stale-detail frame after props change.
   if (!ids.includes(selectedId) && selectedId !== (ids[0] || "")) {
     setSelectedId(ids[0] || "");
-    setExpandedId(null);
+    setDetailOpen(false);
   }
   const stageRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const pendingDialogAction = useRef<(() => void) | null>(null);
   const cardRefs = useRef(new Map<string, HTMLButtonElement>());
   const detailsId = useId();
+  const titleId = useId();
   const effectiveId = validDeckSelection(ids, selectedId, ids[0] || "");
   const selectedIndex = ids.indexOf(effectiveId);
   const selected = candidates[selectedIndex];
   const windowIds = visibleDeckIds(ids, effectiveId);
   const selectedSlot = windowIds.indexOf(effectiveId);
   const byId = useMemo(() => new Map(candidates.map((candidate) => [candidate.series.id, candidate])), [candidates]);
-  const detailOpen = expandedId === effectiveId && !!selected;
+  const modalOpen = detailOpen && !!selected;
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!modalOpen) {
+      if (dialog.open) dialog.close();
+      const pendingAction = pendingDialogAction.current;
+      if (pendingAction) {
+        pendingDialogAction.current = null;
+        queueMicrotask(pendingAction);
+      }
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    if (!dialog.open) dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen]);
   const cards = windowIds.map((id, slot) => {
     const candidate = byId.get(id);
     if (!candidate) return null;
     const active = id === effectiveId;
     const windowCenter = (windowIds.length - 1) / 2;
     const offset = slot - windowCenter;
-    const selectionDistance = Math.abs(slot - selectedSlot);
     const cardStyle = {
-      "--shift": `${offset * 52}px`,
+      "--shift": `${offset * 96}px`,
       "--shift-mobile": `${(slot - selectedSlot) * 44}px`,
       "--arc": `${Math.abs(offset) * 10}px`,
       "--arc-mobile": `${Math.abs(offset) * 6}px`,
       "--tilt": `${offset * 4}deg`,
       "--tilt-mobile": `${offset * 2.4}deg`,
-      "--lift": active ? "18px" : "0px",
-      "--lift-mobile": active ? "12px" : "0px",
-      zIndex: 100 - selectionDistance * 10 + (slot > selectedSlot ? 1 : 0),
+      "--lift": active ? "110px" : "0px",
+      "--lift-mobile": active ? "90px" : "0px",
+      zIndex: slot * 10 + (active ? 5 : 0),
     } as CSSProperties;
     return (
       <button
@@ -59,8 +93,6 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
         style={cardStyle}
         aria-label={`${candidate.series.title}，还有 ${candidate.unwatched} 集未看${active ? "，当前选中，再次激活查看详情" : "，激活后选中"}`}
         aria-pressed={active}
-        aria-expanded={active && detailOpen}
-        aria-controls={active && detailOpen ? detailsId : undefined}
         onClick={() => select(id)}
       >
         <span className={styles.posterFallback} aria-hidden="true"><Layers3 size={42} strokeWidth={1.1} /></span>
@@ -82,32 +114,35 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
 
   function select(id: string) {
     if (id === effectiveId) {
-      setExpandedId((current) => current === id ? null : id);
+      setDetailOpen(true);
       return;
     }
+    dialogRef.current?.close();
     setSelectedId(id);
-    setExpandedId(null);
+    setDetailOpen(false);
   }
 
   function move(direction: -1 | 1) {
     const next = ids[selectedIndex + direction];
     if (!next) return;
     setSelectedId(next);
-    setExpandedId(null);
+    dialogRef.current?.close();
+    setDetailOpen(false);
     requestAnimationFrame(() => cardRefs.current.get(next)?.focus());
   }
 
-  function closeDetails() {
-    setExpandedId(null);
-    cardRefs.current.get(effectiveId)?.focus();
+  function closeDetails(returnFocus = true) {
+    if (dialogRef.current?.open) dialogRef.current.close();
+    setDetailOpen(false);
+    if (returnFocus) cardRefs.current.get(effectiveId)?.focus();
+  }
+
+  function handoffDialogAction(action: () => void) {
+    pendingDialogAction.current = action;
+    closeDetails(false);
   }
 
   function onDeckKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === "Escape" && detailOpen) {
-      event.preventDefault();
-      closeDetails();
-      return;
-    }
     if (!stageRef.current?.contains(event.target as Node)) return;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
@@ -138,16 +173,54 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
         <span className={styles.position} aria-live="polite">{selected.series.title} · {selectedIndex + 1} / {ids.length}</span>
         <div className={styles.controls}>
           <button type="button" aria-label="上一部追番" onClick={() => move(-1)} disabled={selectedIndex <= 0}><ChevronLeft size={20} /></button>
-          <button type="button" aria-label={detailOpen ? "收起当前卡片详情" : "展开当前卡片详情"} onClick={() => detailOpen ? closeDetails() : setExpandedId(effectiveId)}>{detailOpen ? "收起详情" : "查看详情"}</button>
+          <button type="button" aria-label="查看当前卡片详情" onClick={() => setDetailOpen(true)}>查看详情</button>
           <button type="button" aria-label="下一部追番" onClick={() => move(1)} disabled={selectedIndex >= ids.length - 1}><ChevronRight size={20} /></button>
         </div>
       </div>
-      {detailOpen && (
-        <div className={styles.detail} id={detailsId} aria-label={`${selected.series.title}详情`}>
-          <button type="button" className={styles.close} aria-label="收起详情" onClick={closeDetails}><X size={19} /></button>
-          {renderDetails(selected)}
+      <dialog
+        ref={dialogRef}
+        className={styles.dialog}
+        tabIndex={-1}
+        aria-labelledby={titleId}
+        onCancel={(event) => { event.preventDefault(); closeDetails(); }}
+        onClick={(event) => { if (event.target === event.currentTarget) closeDetails(); }}
+        onKeyDown={(event) => {
+          if (event.key !== "Tab") return;
+          const dialog = dialogRef.current;
+          const focusable = Array.from(dialog?.querySelectorAll<HTMLElement>(
+            "a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+          ) || []).filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden" && !element.closest("[inert]"));
+          if (!focusable.length) {
+            event.preventDefault();
+            dialog?.focus();
+            return;
+          }
+          const first = focusable[0], last = focusable[focusable.length - 1];
+          if (event.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement as HTMLElement))) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && (document.activeElement === last || !focusable.includes(document.activeElement as HTMLElement))) {
+            event.preventDefault();
+            first.focus();
+          }
+        }}
+      >
+        <div className={styles.dialogPanel} id={detailsId}>
+          <header className={styles.dialogHeader}>
+            <h2 id={titleId}>{selected.series.title} · 追番详情</h2>
+            <button type="button" className={styles.close} aria-label="关闭详情" onClick={() => closeDetails()}><X size={20} /></button>
+          </header>
+          <div className={styles.dialogBody}>
+            <div className={styles.dialogPoster}>
+              <span className={styles.dialogPosterFallback} aria-hidden="true"><Layers3 size={42} /></span>
+              {selected.series.cover ? <img key={selected.series.cover} src={selected.series.cover} alt={`${selected.series.title}海报`} referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : null}
+            </div>
+            <div className={styles.dialogContent}>
+              <DetailsContent candidate={selected} renderDetails={renderDetails} onEditProgress={handoffDialogAction} />
+            </div>
+          </div>
         </div>
-      )}
+      </dialog>
     </section>
   );
 }

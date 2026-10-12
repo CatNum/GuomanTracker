@@ -720,7 +720,7 @@ export default function Tracker({
                       <RecommendationDeck
                         key={library?.user.uid || "no-account"}
                         candidates={recommendations}
-                        renderDetails={(candidate) => (
+                        renderDetails={(candidate, onEditProgress) => (
                           <div className="featured-body">
                             <span className="small-label">
                               {!candidate.follow.episodeCompleted && candidate.follow.currentEpisode > 0
@@ -737,7 +737,7 @@ export default function Tracker({
                               candidate={candidate}
                               busy={busy || needsLibraryRefresh}
                               onOpen={openOfficial}
-                              onEdit={editProgress}
+                              onEdit={(data) => onEditProgress(() => editProgress(data))}
                               onComplete={complete}
                             />
                             <Verification series={candidate.series} stale={candidate.stale} />
