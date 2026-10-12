@@ -37,7 +37,7 @@ import {
 } from "@/lib/cloudbase-client";
 import { endCloudSession, followCatalogSeries } from "@/lib/account-actions";
 import { CloudActionError, emailErrorMessage, emailRetryDelayMs, inspectAuthenticatedSession, verifyEmailCode, type EmailChallenge } from "@/lib/cloud-auth";
-import { isDefinitiveBusinessRejection, runLibraryOperation } from "@/lib/library-operation";
+import { applyConfirmedReorder, isDefinitiveBusinessRejection, runLibraryOperation } from "@/lib/library-operation";
 import { libraryBelongsToUser, readVerifiedLibrary } from "@/lib/library-identity";
 
 type Mode = "guest" | "cloud";
@@ -250,6 +250,8 @@ export default function Tracker({
     action: string,
     payload: Record<string, unknown>,
     message: string | ((writeResult: unknown) => string),
+    confirmedResult?: (writeResult: unknown) => Library | null,
+    confirmedUserId?: string,
   ) {
     const selectedMode = modeRef.current;
     if (selectedMode === "guest") {
@@ -274,6 +276,7 @@ export default function Tracker({
           const expectedUserId = accountUserId.current;
           if (!expectedUserId) throw new CloudActionError("账号会话已变化，请刷新并确认当前账号。", "ACCOUNT_CHANGED");
           writeResult = await call(action, payload, expectedUserId);
+          return writeResult;
         },
         async () => {
           if (!current()) throw new Error("账号已切换");
@@ -282,9 +285,16 @@ export default function Tracker({
           return data;
         },
         isDefinitiveBusinessRejection,
+        confirmedResult && (async (result) => {
+          const session = await getAuthenticatedSession();
+          if (!current() || !session || session.userId !== accountUserId.current || session.userId !== confirmedUserId)
+            throw new CloudActionError("账号会话已变化，请刷新并确认当前账号。", "ACCOUNT_CHANGED");
+          return confirmedResult(result);
+        }),
       );
       if (!current()) return false;
       if (result.kind === "saved") {
+        setLibrary(result.library);
         markLibraryRefresh(false);
         setNotice(typeof message === "function" ? message(writeResult) : message);
         return true;
@@ -322,7 +332,7 @@ export default function Tracker({
       seriesIds: next,
       expectedMembershipVersion: library.membershipVersion ?? 0,
       expectedOrderVersion: library.orderVersion ?? 0,
-    }, "优先级顺序已保存。");
+    }, "", (writeResult) => applyConfirmedReorder(library, next, writeResult), library.user.uid);
   }
   async function movePriorityBefore(sourceId: string, targetId: string) {
     if (!library || sourceId === targetId || listFilter !== "all" || listSort !== "priority" || busy || needsLibraryRefreshRef.current) return;
@@ -336,7 +346,7 @@ export default function Tracker({
       seriesIds: next,
       expectedMembershipVersion: library.membershipVersion ?? 0,
       expectedOrderVersion: library.orderVersion ?? 0,
-    }, "优先级顺序已保存。");
+    }, "", (writeResult) => applyConfirmedReorder(library, next, writeResult), library.user.uid);
   }
   function openLogin(event: React.MouseEvent<HTMLButtonElement>) {
     loginTrigger.current = event.currentTarget;

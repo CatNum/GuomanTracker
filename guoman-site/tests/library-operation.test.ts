@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isDefinitiveBusinessRejection, runLibraryOperation } from '../lib/library-operation.ts';
+import { applyConfirmedReorder, isDefinitiveBusinessRejection, runLibraryOperation } from '../lib/library-operation.ts';
 import { CloudActionError } from '../lib/cloud-auth.ts';
+import type { Library } from '../lib/watching.ts';
 
 test('confirmed write stays successful when display refresh fails and recovery only reads', async () => {
   let writes = 0;
@@ -62,4 +63,51 @@ test('unsupported platforms are correctable business rejections without an unkno
 
 test('invalid full-order requests are correctable business rejections without an unknown-write lock', () => {
   assert.equal(isDefinitiveBusinessRejection(new CloudActionError('排序必须包含本人全部追番', 'INVALID_ORDER')), true);
+});
+
+test('confirmed reorder applies server versions and skips the full-library refresh', async () => {
+  const library: Library = { user: { uid: 'u', displayName: 'U' }, series: [], follows: [], priorityOrder: ['a', 'b'], membershipVersion: 4, orderVersion: 7 };
+  let refreshes = 0;
+  const result = await runLibraryOperation(
+    async () => ({ priorityOrder: ['b', 'a'], membershipVersion: 4, orderVersion: 8 }),
+    async () => { refreshes++; return library; },
+    isDefinitiveBusinessRejection,
+    (value) => applyConfirmedReorder(library, ['b', 'a'], value),
+  );
+  assert.equal(result.kind, 'saved');
+  if (result.kind === 'saved') {
+    assert.deepEqual(result.library.priorityOrder, ['b', 'a']);
+    assert.equal(result.library.membershipVersion, 4);
+    assert.equal(result.library.orderVersion, 8);
+  }
+  assert.equal(refreshes, 0);
+});
+
+test('incomplete reorder response keeps the refresh recovery path', async () => {
+  const library: Library = { user: { uid: 'u', displayName: 'U' }, series: [], follows: [], priorityOrder: ['a'], membershipVersion: 4, orderVersion: 7 };
+  assert.equal(applyConfirmedReorder(library, ['b'], { priorityOrder: ['b'] }), null);
+  assert.equal(applyConfirmedReorder(library, ['b'], { priorityOrder: ['b'], membershipVersion: 4, orderVersion: -1 }), null);
+  assert.equal(applyConfirmedReorder(library, ['b'], { priorityOrder: ['b'], membershipVersion: 4, orderVersion: 7 }), null);
+  let refreshes = 0;
+  const result = await runLibraryOperation(
+    async () => ({ priorityOrder: ['b'] }),
+    async () => { refreshes++; return library; },
+    isDefinitiveBusinessRejection,
+    (value) => applyConfirmedReorder(library, ['b'], value),
+  );
+  assert.equal(result.kind, 'saved');
+  assert.equal(refreshes, 1);
+});
+
+test('confirmed-result failure remains a confirmed write with refresh required', async () => {
+  let refreshes = 0;
+  const error = new Error('session check failed');
+  const result = await runLibraryOperation(
+    async () => ({ saved: true }),
+    async () => { refreshes++; return 'refreshed'; },
+    isDefinitiveBusinessRejection,
+    async () => { throw error; },
+  );
+  assert.deepEqual(result, { kind: 'saved-unrefreshed', error });
+  assert.equal(refreshes, 0);
 });
