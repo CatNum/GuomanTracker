@@ -8,7 +8,9 @@
 @media(max-width:700px){.site-header{height:64px}.intro{margin:20px 0 17px}.overview{padding:12px 0;margin-bottom:18px}.platform-row{margin-top:14px;margin-bottom:8px}.section-bar{padding-bottom:10px}.live-note{margin-bottom:13px}.card-bottom>span{font-size:12px}.source-note p{font-size:13px}}
 
 /* 个性化观看工作区 */
-.tracker-shell { min-height:100vh; }
+.tracker-shell { width:100%; max-width:none; min-height:100vh; margin:0; }
+.tracker-shell .site-header { padding-right:8px; padding-left:8px; }
+.tracker-shell footer { padding-right:12px; padding-left:12px; }
 .account-menu, .tracker-nav, .action-row, .dialog-heading { display:flex; align-items:center; gap:12px; }
 .account-menu { font-size:13px; color:#a7b7a5; }
 .account-menu { min-width:0; max-width:55%; }
@@ -147,19 +149,19 @@
 }
 
 /* 追番工作区侧栏与统计提示 */
-.tracker-workspace { display:flex; align-items:flex-start; gap:20px; min-width:0; }
-.tracker-sidebar { position:sticky; top:0; align-self:flex-start; height:100vh; z-index:5; flex:0 0 64px; width:64px; padding-top:16px; transition:width .18s ease,flex-basis .18s ease; }
+.tracker-workspace { display:flex; align-items:flex-start; gap:8px; min-width:0; padding:0; }
+.tracker-sidebar { position:sticky; top:0; align-self:flex-start; height:100vh; z-index:5; flex:0 0 48px; width:48px; padding-top:16px; transition:width .18s ease,flex-basis .18s ease; }
 .sidebar-panel { position:sticky; top:14px; width:100%; }
-.sidebar-expanded .tracker-sidebar { flex-basis:176px; width:176px; }
-.sidebar-toggle { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; min-height:42px; padding:9px; border:1px solid #303b2b; border-radius:8px; background:#1b201a; color:#b5c0ae; }
+.sidebar-expanded .tracker-sidebar { flex-basis:144px; width:144px; }
+.sidebar-toggle { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; min-height:44px; padding:9px; border:1px solid #303b2b; border-radius:8px; background:#1b201a; color:#b5c0ae; }
 .sidebar-toggle span { display:none; }
 .sidebar-expanded .sidebar-toggle { justify-content:flex-start; padding:9px 12px; }
-.sidebar-expanded .sidebar-toggle span { display:inline; font-size:12px; }
+.sidebar-expanded .sidebar-toggle span { display:inline; font-size:12px; white-space:nowrap; }
 .tracker-nav { display:flex; flex-direction:column; align-items:stretch; gap:6px; padding:12px 0; border:0; }
 .tracker-nav button { justify-content:center; min-height:44px; padding:10px; border-radius:8px; }
 .tracker-nav button span { display:none; }
 .sidebar-expanded .tracker-nav button { justify-content:flex-start; padding:10px 12px; }
-.sidebar-expanded .tracker-nav button span { display:inline; }
+.sidebar-expanded .tracker-nav button span { display:inline; white-space:nowrap; }
 .tracker-nav button.active { box-shadow:inset 3px 0 #c5f56b; }
 .tracker-nav .submit-entry { margin:8px 0 0; border:1px solid #35422f; }
 .tracker-content { flex:1; min-width:0; }
@@ -172,13 +174,15 @@
 .watch-stats-tooltip { position:absolute; right:0; bottom:100%; width:max-content; padding:6px 9px; border:1px solid #46553b; border-radius:6px; background:#20271d; color:#e1eadb; font-size:12px; white-space:nowrap; opacity:0; visibility:hidden; transform:translateY(3px); transition:opacity .15s ease,transform .15s ease,visibility .15s; }
 .watch-stats-tooltip.visible { opacity:1; visibility:visible; transform:translateY(0); }
 @media(max-width:700px) {
-  .tracker-workspace { gap:10px; position:relative; }
-  .tracker-sidebar { flex-basis:52px; width:52px; padding-top:10px; }
+  .tracker-shell .site-header { padding-right:8px; padding-left:8px; }
+  .tracker-shell footer { padding-right:12px; padding-left:12px; }
+  .tracker-workspace { gap:8px; position:relative; }
+  .tracker-sidebar { flex-basis:48px; width:48px; padding-top:10px; }
   .tracker-sidebar { top:0; height:100vh; }
-  .sidebar-expanded .tracker-sidebar { flex-basis:52px; width:52px; }
+  .sidebar-expanded .tracker-sidebar { flex-basis:48px; width:48px; }
   .sidebar-panel { top:10px; }
-  .sidebar-expanded .sidebar-panel { position:absolute; left:0; top:10px; width:176px; padding:10px; background:#151917; border:1px solid #303b2b; border-radius:10px; box-shadow:0 12px 36px #0009; }
-  .tracker-content { width:calc(100% - 62px); }
+  .sidebar-expanded .sidebar-panel { position:absolute; left:0; top:10px; width:144px; padding:10px; background:#151917; border:1px solid #303b2b; border-radius:10px; box-shadow:0 12px 36px #0009; }
+  .tracker-content { width:auto; flex:1; min-width:0; }
   .tracker-content .workspace-title { margin-top:24px; }
   .tracker-nav { padding:10px 0; }
   .sidebar-expanded .tracker-nav button { justify-content:flex-start; }
