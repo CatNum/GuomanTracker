@@ -8,9 +8,9 @@
 @media(max-width:700px){.site-header{height:64px}.intro{margin:20px 0 17px}.overview{padding:12px 0;margin-bottom:18px}.platform-row{margin-top:14px;margin-bottom:8px}.section-bar{padding-bottom:10px}.live-note{margin-bottom:13px}.card-bottom>span{font-size:12px}.source-note p{font-size:13px}}
 
 /* 个性化观看工作区 */
-.tracker-shell { width:100%; max-width:none; min-height:100vh; margin:0; }
-.tracker-shell .site-header { padding-right:8px; padding-left:8px; }
-.tracker-shell footer { padding-right:12px; padding-left:12px; }
+.tracker-shell { --page-gutter:clamp(24px,4vw,64px); width:100%; max-width:1600px; min-height:100vh; margin:0 auto; }
+.tracker-shell .site-header { padding-right:var(--page-gutter); padding-left:var(--page-gutter); }
+.tracker-shell footer { padding-right:var(--page-gutter); padding-left:var(--page-gutter); }
 .account-menu, .tracker-nav, .action-row, .dialog-heading { display:flex; align-items:center; gap:12px; }
 .account-menu { font-size:13px; color:#a7b7a5; }
 .account-menu { min-width:0; max-width:55%; }
@@ -127,7 +127,8 @@
   .featured-watch { grid-template-columns:170px 1fr; gap:22px; }.featured-body h2 { font-size:25px; }
 }
 @media(max-width:700px) {
-  .tracker-shell .site-header { height:auto; min-height:64px; flex-wrap:wrap; gap:8px 12px; padding:12px 5%; }
+  .tracker-shell { --page-gutter:12px; }
+  .tracker-shell .site-header { height:auto; min-height:64px; flex-wrap:wrap; gap:8px 12px; padding:12px var(--page-gutter); }
   .tracker-shell .account-menu { flex:1 1 100%; max-width:100%; justify-content:flex-end; }
   .tracker-shell .account-email { flex:1 1 auto; }
   .tracker-nav { flex-wrap:wrap; padding:14px 0; gap:4px; }.tracker-nav button { padding:9px 10px; font-size:13px; }.tracker-nav .submit-entry { width:100%; justify-content:center; margin:6px 0 0; }
@@ -149,7 +150,7 @@
 }
 
 /* 追番工作区侧栏与统计提示 */
-.tracker-workspace { display:flex; align-items:flex-start; gap:8px; min-width:0; padding:0; }
+.tracker-workspace { display:flex; align-items:flex-start; gap:8px; min-width:0; padding:0 var(--page-gutter); }
 .tracker-sidebar { position:sticky; top:0; align-self:flex-start; height:100vh; z-index:5; flex:0 0 48px; width:48px; padding-top:16px; transition:width .18s ease,flex-basis .18s ease; }
 .sidebar-panel { position:sticky; top:14px; width:100%; }
 .sidebar-expanded .tracker-sidebar { flex-basis:144px; width:144px; }
@@ -174,8 +175,6 @@
 .watch-stats-tooltip { position:absolute; right:0; bottom:100%; width:max-content; padding:6px 9px; border:1px solid #46553b; border-radius:6px; background:#20271d; color:#e1eadb; font-size:12px; white-space:nowrap; opacity:0; visibility:hidden; transform:translateY(3px); transition:opacity .15s ease,transform .15s ease,visibility .15s; }
 .watch-stats-tooltip.visible { opacity:1; visibility:visible; transform:translateY(0); }
 @media(max-width:700px) {
-  .tracker-shell .site-header { padding-right:8px; padding-left:8px; }
-  .tracker-shell footer { padding-right:12px; padding-left:12px; }
   .tracker-workspace { gap:8px; position:relative; }
   .tracker-sidebar { flex-basis:48px; width:48px; padding-top:10px; }
   .tracker-sidebar { top:0; height:100vh; }
