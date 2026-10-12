@@ -24,12 +24,13 @@ export async function cloudApp() {
 export async function cloudCall(
   action: string,
   payload: Record<string, unknown> = {},
+  expectedUserId?: string,
 ) {
   const app = await cloudApp();
   return callAuthenticated((app.auth() as unknown) as EmailAuth,
     async (selectedAction, selectedPayload) => app.callFunction({
       name: "guoman-user", data: { action: selectedAction, payload: selectedPayload },
-    }), action, payload);
+    }), action, payload, expectedUserId);
 }
 export async function getAuthenticatedSession() {
   return readSession((await cloudApp()).auth() as unknown as EmailAuth);

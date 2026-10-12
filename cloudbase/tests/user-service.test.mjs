@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { createUserService } from '../shared/user-service.mjs';
 import { createCloudbaseStore } from '../shared/cloudbase-store.mjs';
@@ -16,6 +17,7 @@ test('SCF CommonJS entry exposes its callable index.main without loading network
 class MemoryStore {
   maps = new Map();
   queue = Promise.resolve();
+  lastTransactionWrites = [];
   async get(collection, id) { return structuredClone(this.maps.get(`${collection}/${id}`) ?? null); }
   async put(collection, id, data) { this.maps.set(`${collection}/${id}`, structuredClone(data)); }
   async remove(collection, id) { this.maps.delete(`${collection}/${id}`); }
@@ -25,11 +27,25 @@ class MemoryStore {
   transaction(callback) {
     const result = this.queue.then(async () => {
       const before = structuredClone(this.maps);
-      try { return await callback(this); } catch (error) { this.maps = before; throw error; }
+      const writes = [];
+      const tx = {
+        get: (...args) => this.get(...args),
+        put: async (...args) => { writes.push({ operation: 'put', collection: args[0], id: args[1] }); return this.put(...args); },
+        remove: async (...args) => { writes.push({ operation: 'remove', collection: args[0], id: args[1] }); return this.remove(...args); },
+      };
+      try {
+        const value = await callback(tx);
+        this.lastTransactionWrites = writes;
+        return value;
+      } catch (error) { this.maps = before; throw error; }
     });
     this.queue = result.catch(() => {});
     return result;
   }
+}
+
+function accountStats(store, uid = 'alice') {
+  return [...store.maps.values()].find((value) => value.kind === 'stats' && value.owner === uid) ?? null;
 }
 
 const seed = [{ id: 'bili-seed', title: '已收录国漫', platform: 'bilibili', url: 'https://www.bilibili.com/bangumi/play/ss123', cover: '', status: '连载', episodes: '更新至10话', events: [], checkedAt: '2026-10-05T00:00:00.000Z', source: '官方目录', latestEpisode: 10 }];
@@ -73,6 +89,202 @@ test('official-link-only submissions preserve known titles and use a pending tit
   assert.equal(fresh.data.series.title, 'B站待核验节目 ss456');
   assert.equal(fresh.data.series.episodes, '待核验');
   assert.equal(fresh.data.series.monitoring, 'queued');
+});
+
+test('new submissions resolve official metadata once before the transaction while existing titles win races', async () => {
+  const store = new MemoryStore();
+  const order = [];
+  let calls = 0;
+  const service = createUserService({
+    store,
+    seed,
+    resolveMetadata: async (official) => {
+      calls++;
+      order.push('metadata');
+      assert.equal(official.platform, 'bilibili');
+      await store.put('guoman_series', official.id, { id: official.id, title: '并发已收录标题', platform: official.platform, url: official.url, cover: '', status: 'unknown', episodes: '待核验', events: [], checkedAt: '2026-10-05T00:00:00.000Z' });
+      return { title: '抓取到的标题', cover: 'https://img.example/cover.jpg' };
+    },
+  });
+  const originalTransaction = store.transaction.bind(store);
+  store.transaction = (callback) => { order.push('transaction'); return originalTransaction(callback); };
+  const call = (action, payload = {}) => service({ action, payload }, { uid: 'alice' });
+  const fresh = await call('submit', { url: 'https://www.bilibili.com/bangumi/play/ss456' });
+  assert.equal(fresh.data.series.title, '并发已收录标题');
+  assert.equal(calls, 1);
+  assert.deepEqual(order, ['metadata', 'transaction']);
+  const known = await call('submit', { url: seed[0].url });
+  assert.equal(known.data.series.title, '已收录国漫');
+  assert.equal(calls, 1);
+});
+
+test('daily submit, follow, and monitor quotas reject new links before metadata resolution', async () => {
+  const sha = (value) => createHash('sha256').update(value).digest('hex');
+  let calls = 0;
+  const dailyStore = new MemoryStore();
+  const dailyService = createUserService({ store: dailyStore, seed, resolveMetadata: async () => { calls++; return { title: '真实标题' }; } });
+  const dailyCall = (payload) => dailyService({ action: 'submit', payload }, { uid: 'alice' });
+  for (let index = 0; index < 10; index++) {
+    const result = await dailyCall({ url: `https://www.bilibili.com/bangumi/play/ss${7654000 + index}` });
+    assert.equal(result.ok, true);
+  }
+  assert.equal(calls, 10);
+  const dailyBlocked = await dailyCall({ url: 'https://www.bilibili.com/bangumi/play/ss7654999' });
+  assert.equal(dailyBlocked.error.code, 'RATE_LIMITED');
+  assert.equal(calls, 10);
+
+  let followCalls = 0;
+  const followStore = new MemoryStore();
+  await followStore.put('guoman_watch_state', `stats-${sha('alice')}`, { kind: 'stats', owner: 'alice', followCount: '500', priorityOrder: [], membershipVersion: 500, orderVersion: 0 });
+  for (let index = 0; index < 500; index++) {
+    await followStore.put('guoman_watch_state', `legacy-follow-${index}`, { kind: 'follow', owner: 'alice', seriesId: `legacy-${index}` });
+  }
+  const followService = createUserService({ store: followStore, seed, resolveMetadata: async () => { followCalls++; return { title: '真实标题' }; } });
+  const followBlocked = await followService({ action: 'submit', payload: { url: 'https://www.bilibili.com/bangumi/play/ss7655000' } }, { uid: 'alice' });
+  assert.equal(followBlocked.error.code, 'FOLLOW_LIMIT');
+  assert.equal(followCalls, 0);
+
+  let monitorCalls = 0;
+  const monitorStore = new MemoryStore();
+  const day = new Date('2026-10-05T00:00:00.000Z').getTime() + 8 * 3600000;
+  const chinaDay = new Date(day).toISOString().slice(0, 10);
+  await monitorStore.put('guoman_watch_state', `scan-quota-${sha(JSON.stringify(['alice', chinaDay]))}`, { kind: 'scan-quota', owner: 'alice', day: chinaDay, count: 20 });
+  const monitorService = createUserService({ store: monitorStore, seed, now: () => new Date('2026-10-05T00:00:00.000Z'), resolveMetadata: async () => { monitorCalls++; return { title: '真实标题' }; } });
+  const monitorBlocked = await monitorService({ action: 'submit', payload: { url: 'https://www.bilibili.com/bangumi/play/ss7655001' } }, { uid: 'alice' });
+  assert.equal(monitorBlocked.error.code, 'RATE_LIMITED');
+  assert.equal(monitorCalls, 0);
+});
+
+test('metadata resolution failure keeps a clear pending title and permits a later submission', async () => {
+  const store = new MemoryStore();
+  let calls = 0;
+  const service = createUserService({ store, seed, resolveMetadata: async () => { calls++; throw new Error('timeout'); } });
+  const call = (action, payload) => service({ action, payload }, { uid: 'alice' });
+  const url = 'https://www.bilibili.com/bangumi/play/ss457';
+  const failed = await call('submit', { url });
+  assert.equal(failed.ok, true);
+  assert.equal(failed.data.series.title, 'B站待核验节目 ss457');
+  assert.equal(failed.data.series.metadataPending, true);
+  assert.equal(calls, 1);
+  const repeated = await call('submit', { url });
+  assert.equal(repeated.data.series.title, 'B站待核验节目 ss457');
+  assert.equal(calls, 1);
+});
+
+test('membership stats preserve unknown fields and increment only on real follow changes', async () => {
+  const store = new MemoryStore();
+  const catalog = [...seed, { ...seed[0], id: 'bili-next', url: 'https://www.bilibili.com/bangumi/play/ss124' }];
+  const service = createUserService({ store, seed: catalog });
+  const call = (action, payload = {}) => service({ action, payload }, { uid: 'alice' });
+  await call('follow', { seriesId: 'bili-seed' });
+  let stats = accountStats(store);
+  assert.deepEqual(stats.priorityOrder, ['bili-seed']);
+  assert.equal(stats.membershipVersion, 1);
+  assert.equal(stats.orderVersion, 0);
+  await store.put('guoman_watch_state', [...store.maps.keys()].find((key) => key.startsWith('guoman_watch_state/stats-')).split('/')[1], { ...stats, preserved: 'yes' });
+  await call('follow', { seriesId: 'bili-next' });
+  stats = accountStats(store);
+  assert.equal(stats.preserved, 'yes');
+  assert.deepEqual(stats.priorityOrder, ['bili-seed', 'bili-next']);
+  assert.equal(stats.membershipVersion, 2);
+  assert.equal((await call('progress', { seriesId: 'bili-seed', currentEpisode: 1, episodeCompleted: false, paused: false, version: 1 })).ok, true);
+  assert.equal(accountStats(store).membershipVersion, 2);
+  assert.equal((await call('unfollow', { seriesId: 'bili-next' })).ok, true);
+  stats = accountStats(store);
+  assert.deepEqual(stats.priorityOrder, ['bili-seed']);
+  assert.equal(stats.membershipVersion, 3);
+  assert.equal(stats.orderVersion, 0);
+  assert.equal(stats.preserved, 'yes');
+});
+
+test('legacy follows without account stats keep title order and rebuild the count before adding a new link', async () => {
+  const { store, call } = setup();
+  for (const [id, title] of [['old-yuan', '苍元图'], ['old-lan', '苍兰诀']]) {
+    await store.put('guoman_series', id, { id, title, platform: 'bilibili', url: `https://www.bilibili.com/bangumi/play/${id}`, cover: '', status: 'unknown', episodes: '待核验', events: [], checkedAt: '2026-10-05T00:00:00.000Z', source: 'test' });
+    await store.put('guoman_watch_state', `legacy-${id}`, { owner: 'alice', kind: 'follow', seriesId: id, currentEpisode: 0, episodeCompleted: false, paused: false, updatedAt: '2026-10-05T00:00:00.000Z', version: 1 });
+  }
+  const added = await call('alice', 'submit', { url: 'https://www.bilibili.com/bangumi/play/ss7654321' });
+  assert.equal(added.ok, true);
+  const stats = accountStats(store);
+  assert.equal(stats.followCount, 3);
+  assert.deepEqual(stats.priorityOrder, ['old-lan', 'old-yuan', added.data.series.id]);
+});
+
+test('library returns a snapshot-consistent full order and retries membership changes during list', async () => {
+  const store = new MemoryStore();
+  const service = createUserService({ store, seed });
+  await service({ action: 'follow', payload: { seriesId: 'bili-seed' } }, { uid: 'alice' });
+  const statsKey = [...store.maps.keys()].find((key) => key.startsWith('guoman_watch_state/stats-'));
+  const originalList = store.listFollows.bind(store);
+  let listCalls = 0;
+  store.listFollows = async (uid) => {
+    const records = await originalList(uid);
+    listCalls++;
+    if (listCalls === 1) await store.put('guoman_watch_state', statsKey.split('/')[1], { ...accountStats(store), membershipVersion: 2 });
+    return records;
+  };
+  const result = await service({ action: 'library' }, { uid: 'alice' });
+  assert.equal(result.ok, true);
+  assert.equal(listCalls, 2);
+  assert.deepEqual(result.data.priorityOrder, ['bili-seed']);
+  assert.equal(result.data.membershipVersion, 2);
+  assert.equal(result.data.orderVersion, 0);
+});
+
+test('reorder updates one stats document for 500 follows and rejects malformed or stale orders', async () => {
+  const store = new MemoryStore();
+  const catalog = manySeed(500);
+  const service = createUserService({ store, seed: catalog });
+  const follows = catalog.map((series) => ({ owner: 'alice', kind: 'follow', seriesId: series.id, currentEpisode: 0, episodeCompleted: false, paused: false, updatedAt: '2026-10-05T00:00:00.000Z', version: 1 }));
+  assert.equal((await service({ action: 'follow', payload: { seriesId: catalog[0].id } }, { uid: 'alice' })).ok, true);
+  for (const follow of follows.slice(1)) await store.put('guoman_watch_state', `follow-${follow.seriesId}`, follow);
+  const statsKey = [...store.maps.keys()].find((key) => key.startsWith('guoman_watch_state/stats-'));
+  await store.put('guoman_watch_state', statsKey.split('/')[1], { ...accountStats(store), followCount: 500, priorityOrder: follows.map((item) => item.seriesId), membershipVersion: 5, orderVersion: 3, retained: true });
+  const call = (payload) => service({ action: 'reorder', payload }, { uid: 'alice' });
+  const reversed = follows.map((item) => item.seriesId).reverse();
+  assert.equal((await call({ seriesIds: reversed.slice(1), expectedMembershipVersion: 5, expectedOrderVersion: 3 })).error.code, 'INVALID_ORDER');
+  assert.equal((await call({ seriesIds: [...reversed, reversed[0]], expectedMembershipVersion: 5, expectedOrderVersion: 3 })).error.code, 'INVALID_ORDER');
+  assert.equal((await call({ seriesIds: [...reversed.slice(1), 'somebody-elses-id'], expectedMembershipVersion: 5, expectedOrderVersion: 3 })).error.code, 'INVALID_ORDER');
+  const saved = await call({ seriesIds: reversed, expectedMembershipVersion: 5, expectedOrderVersion: 3 });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(saved.data.priorityOrder, reversed);
+  assert.equal(saved.data.orderVersion, 4);
+  assert.equal(saved.data.membershipVersion, 5);
+  assert.equal(accountStats(store).retained, true);
+  assert.equal(store.lastTransactionWrites.length, 1);
+  assert.equal(store.lastTransactionWrites[0].id, statsKey.split('/')[1]);
+  assert.equal((await call({ seriesIds: reversed, expectedMembershipVersion: 5, expectedOrderVersion: 3 })).error.code, 'CONFLICT');
+});
+
+test('reorder detects membership ABA and concurrent order changes but ignores progress versions', async () => {
+  const { call: baseCall, store } = setup();
+  await baseCall('alice', 'follow', { seriesId: 'bili-seed' });
+  const invoke = (action, payload = {}) => baseCall('alice', action, payload);
+  const statsKey = [...store.maps.keys()].find((key) => key.startsWith('guoman_watch_state/stats-'));
+  const current = accountStats(store);
+  const orderPayload = { seriesIds: ['bili-seed'], expectedMembershipVersion: current.membershipVersion, expectedOrderVersion: current.orderVersion };
+  const originalList = store.listFollows.bind(store);
+  let alter = true;
+  store.listFollows = async (uid) => {
+    if (alter && uid === 'alice') {
+      alter = false;
+      await invoke('unfollow', { seriesId: 'bili-seed' });
+      await invoke('follow', { seriesId: 'bili-seed' });
+    }
+    return originalList(uid);
+  };
+  assert.equal((await invoke('reorder', orderPayload)).error.code, 'CONFLICT');
+  store.listFollows = originalList;
+  const latest = accountStats(store);
+  const firstOrder = { seriesIds: ['bili-seed'], expectedMembershipVersion: latest.membershipVersion, expectedOrderVersion: latest.orderVersion };
+  const concurrent = await Promise.all([invoke('reorder', firstOrder), invoke('reorder', firstOrder)]);
+  assert.equal(concurrent.filter((result) => result.ok).length, 1);
+  assert.equal(concurrent.filter((result) => result.error?.code === 'CONFLICT').length, 1);
+  const changed = accountStats(store);
+  const savedAfterProgress = await invoke('progress', { seriesId: 'bili-seed', currentEpisode: 2, episodeCompleted: false, paused: false, version: 1 });
+  assert.equal(savedAfterProgress.ok, true);
+  assert.equal((await invoke('reorder', { seriesIds: ['bili-seed'], expectedMembershipVersion: changed.membershipVersion, expectedOrderVersion: changed.orderVersion })).ok, true);
+  assert.equal(accountStats(store).membershipVersion, changed.membershipVersion);
 });
 
 test('unsupported platforms reject submit, follow, progress, and open while unfollow remains available', async () => {
@@ -148,6 +360,8 @@ test('validation errors and internal failures use safe envelopes', async () => {
 
 test('uncertain PG commit returns a distinct refresh-required envelope without leaking its cause', async () => {
   const store = {
+    get: async () => null,
+    listFollows: async () => [],
     transaction: async () => { throw new CommitUnconfirmedError(new Error('PRIVATE_NETWORK_DETAIL')); },
   };
   const service = createUserService({ store, seed });

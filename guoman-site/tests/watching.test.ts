@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { latestPublishedEpisode, watchingQueue } from "../lib/watching.ts";
+import { filterFollowIds, latestPublishedEpisode, recommendedCandidate, sortFollowIds, watchingQueue } from "../lib/watching.ts";
 import { consumeOAuthState } from "../lib/oauth-state.ts";
 import {
   endCloudSession,
@@ -95,7 +95,84 @@ test("不支持的平台历史追番保留在库里但不进入观看推荐队�
     [follow("iqiyi")],
     now,
   );
-  assert.deepEqual(result, { ready: [], caughtUp: [], unknown: [] });
+  assert.deepEqual(result, { ready: [], caughtUp: [], unknown: [], thisWeek: [] });
+});
+test("本周更新统计使用北京时间自然周的已发布正片集数证据", () => {
+  const at = Date.parse("2026-10-11T16:00:00.000Z"); // 北京时间周一 00:00
+  const item = {
+    ...anime("weekly"), latestEpisode: undefined, episodes: "待核验", events: [
+      { at: at - 1, label: "第9集", published: true, delayed: false },
+      { at, label: "第4集", published: true, delayed: false },
+      { at: at + 1000, label: "第5集", published: true, delayed: false },
+      { at: at + 2000, label: "第6集预告", published: true, delayed: false },
+      { at: at + 3000, label: "第7集花絮", published: true, delayed: false },
+      { at: at + 4000, label: "第8集", published: true, delayed: true },
+      { at: at + 5000, label: "第10集", published: true, delayed: false },
+    ],
+  };
+  const result = watchingQueue([item], [follow("weekly", 4)], at + 4500);
+  assert.deepEqual(result.thisWeek.map((candidate) => candidate.series.id), ["weekly"]);
+  assert.equal(result.thisWeek[0].weeklyEpisodes, 1);
+  const completed = watchingQueue([item], [{ ...follow("weekly", 10), episodeCompleted: true }], at + 5000);
+  assert.equal(completed.thisWeek.length, 0);
+});
+test("本周统计在北京时间周一零点切周，排期与未来事件不入统计", () => {
+  const monday = Date.parse("2026-10-11T16:00:00.000Z");
+  const weekly = {
+    ...anime("weekly", "待核验"),
+    latestEpisode: undefined,
+    events: [
+      { at: monday - 1, label: "第3集", published: true, delayed: false },
+      { at: monday, label: "第4集", published: true, delayed: false },
+      { at: monday + 1, label: "第5集", published: true, delayed: false },
+    ],
+  };
+  const atBoundary = watchingQueue([weekly], [follow("weekly", 3)], monday);
+  assert.equal(atBoundary.thisWeek[0].weeklyEpisodes, 1);
+  const beforeFutureEvent = watchingQueue([weekly], [follow("weekly", 3)], monday);
+  assert.equal(beforeFutureEvent.thisWeek.length, 1);
+  const scheduledOnly = watchingQueue([{ ...anime("scheduled"), days: [1], time: "20:00" }], [follow("scheduled")], monday + 1);
+  assert.equal(scheduledOnly.thisWeek.length, 0);
+});
+test("推荐按用户优先级选择唯一有可靠未看更新的作品", () => {
+  const queue = watchingQueue([anime("a"), anime("b"), anime("c")], [follow("a"), follow("b"), follow("c")], now);
+  assert.equal(recommendedCandidate(queue.ready, ["c", "b", "a"])?.series.id, "c");
+  assert.equal(recommendedCandidate(queue.ready, ["missing"])?.series.id, "a");
+});
+test("推荐跳过已追平和暂停作品，但保留完结且尚有未看集数的作品", () => {
+  const series = [
+    { ...anime("caught"), status: "finished" },
+    { ...anime("paused"), status: "finished" },
+    { ...anime("finished-unwatched"), status: "finished" },
+    { ...anime("finished-done"), status: "finished" },
+  ];
+  const follows = [
+    { ...follow("caught", 12), episodeCompleted: true },
+    { ...follow("paused"), paused: true },
+    { ...follow("finished-unwatched", 11), episodeCompleted: false },
+    { ...follow("finished-done", 12), episodeCompleted: true },
+  ];
+  const queue = watchingQueue(series, follows, now);
+  assert.deepEqual(queue.ready.map((item) => item.series.id), ["finished-unwatched"]);
+  assert.equal(recommendedCandidate(queue.ready, ["caught", "paused", "finished-unwatched", "finished-done"])?.series.id, "finished-unwatched");
+});
+test("追番排序支持完整名称拼音和编号稳定兜底，筛选保留隐藏顺序", () => {
+  const follows = ["same-z", "cang-yuan", "cae", "same-a", "cba", "cang-lan"].map((id) => follow(id));
+  const series = [
+    { ...anime("same-z"), title: "重名" },
+    { ...anime("cang-yuan"), title: "苍元图" },
+    { ...anime("cae"), title: "cae" },
+    { ...anime("same-a"), title: "重名" },
+    { ...anime("cba"), title: "cba" },
+    { ...anime("cang-lan"), title: "苍兰诀" },
+  ];
+  assert.deepEqual(sortFollowIds(follows, series, ["same-z", "cang-yuan", "cae", "same-a", "cba", "cang-lan"], "priority"), ["same-z", "cang-yuan", "cae", "same-a", "cba", "cang-lan"]);
+  assert.deepEqual(sortFollowIds([follow("cba"), follow("cae")], series, [], "name"), ["cae", "cba"]);
+  assert.deepEqual(sortFollowIds([follow("cang-yuan"), follow("cang-lan")], series, [], "name"), ["cang-lan", "cang-yuan"]);
+  assert.deepEqual(sortFollowIds([follow("same-z"), follow("same-a")], series, [], "name"), ["same-a", "same-z"]);
+  const queue = watchingQueue(series, follows, now);
+  const filtered = filterFollowIds(follows, queue, "unwatched", []);
+  assert.deepEqual(filtered, ["same-z", "cang-yuan", "cae", "same-a", "cba", "cang-lan"]);
 });
 test("续看优先；过期排期不假定已经上线", () => {
   const result = watchingQueue(

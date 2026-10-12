@@ -37,6 +37,16 @@ test("会话查询 resolve 错误阻断用户库请求", async () => {
   assert.equal(called, false);
 });
 
+test("调用写入前SDK账号已切换时拒绝请求，不调用云函数", async () => {
+  let called = false;
+  const auth = { getSession: async () => ({ data: { session: { user: { id: "user-b", is_anonymous: false } } }, error: null }) };
+  await assert.rejects(
+    () => callAuthenticated(auth, async () => { called = true; return { result: { ok: true, data: {} } }; }, "submit", {}, "user-a"),
+    /账号会话已变化/,
+  );
+  assert.equal(called, false);
+});
+
 test("冷启动会话查询失败标记账号状态未确认，空会话仍是普通访客", async () => {
   const failed = await inspectAuthenticatedSession(async () => { throw new Error("offline"); });
   assert.equal(failed.session, null);

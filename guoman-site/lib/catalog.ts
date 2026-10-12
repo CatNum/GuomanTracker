@@ -7,6 +7,7 @@ export type Anime = {
   events: { at: number; label: string; published: boolean; delayed: boolean }[];
   days?: number[]; time?: string; schedule?: string;
   latestEpisode?: number; monitoring?: 'queued'|'active'|'unsupported'|'error';
+  metadataPending?: boolean;
   lastScanAt?: string; lastScanAttemptAt?: string; nextScanAt?: string; scanError?: string;
 };
 export const platforms: Record<string, {name:string; letter:string; color:string; home:string}> = {

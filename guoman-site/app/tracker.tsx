@@ -19,9 +19,14 @@ import { isSupportedPlatform, platforms, type Anime } from "@/lib/catalog";
 import {
   watchingQueue,
   latestPublishedEpisode,
+  filterFollowIds,
+  recommendedCandidate,
+  sortFollowIds,
   type Library,
   type WatchState,
   type WatchCandidate,
+  type WatchFilter,
+  type FollowSort,
 } from "@/lib/watching";
 import {
   cloudApp,
@@ -33,10 +38,10 @@ import {
 import { endCloudSession, followCatalogSeries } from "@/lib/account-actions";
 import { CloudActionError, emailErrorMessage, emailRetryDelayMs, inspectAuthenticatedSession, verifyEmailCode, type EmailChallenge } from "@/lib/cloud-auth";
 import { isDefinitiveBusinessRejection, runLibraryOperation } from "@/lib/library-operation";
-import { libraryBelongsToUser } from "@/lib/library-identity";
+import { libraryBelongsToUser, readVerifiedLibrary } from "@/lib/library-identity";
 
 type Mode = "guest" | "cloud";
-type View = "watch" | "library" | "catalog";
+type View = "library" | "catalog";
 const monitoringLabels = {
   queued: "等待核验",
   active: "监控中",
@@ -55,7 +60,9 @@ export default function Tracker({
 }) {
   const [mode, setMode] = useState<Mode>("guest"),
     [library, setLibrary] = useState<Library | null>(null),
-    [view, setView] = useState<View>("watch");
+    [view, setView] = useState<View>("library");
+  const [listFilter, setListFilter] = useState<WatchFilter>("all");
+  const [listSort, setListSort] = useState<FollowSort>("priority");
   const [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(""),
     [loading, setLoading] = useState(true),
@@ -83,9 +90,11 @@ export default function Tracker({
   const mutationLock = useRef(false);
   const needsLibraryRefreshRef = useRef(false);
   const generation = useRef(0);
+  const accountUserId = useRef<string | null>(null);
   const modeRef = useRef<Mode>("guest");
   const mounted = useRef(true);
   const loginTrigger = useRef<HTMLButtonElement | null>(null);
+  const draggedSeriesId = useRef<string | null>(null);
   useEffect(() => {
     if (!loginOpen || !resendAt || Date.now() >= resendAt) return;
     const timer = setInterval(() => {
@@ -96,19 +105,24 @@ export default function Tracker({
     return () => clearInterval(timer);
   }, [loginOpen, resendAt]);
   const call = useCallback(
-    (action: string, payload: Record<string, unknown> = {}) => cloudCall(action, payload),
+    (action: string, payload: Record<string, unknown> = {}, expectedUserId?: string) => cloudCall(action, payload, expectedUserId),
     [],
   );
   const reload = useCallback(
     async () => {
       if (modeRef.current === "guest") return null;
       const currentGeneration = generation.current;
-      const data = (await call("library")) as Library;
-      if (mounted.current && currentGeneration === generation.current && modeRef.current === "cloud") {
-        setLibrary(data);
-        return data;
-      }
-      return null;
+      const current = () => mounted.current && currentGeneration === generation.current && modeRef.current === "cloud";
+      const verified = await readVerifiedLibrary(
+        getAuthenticatedSession,
+        async (expectedUserId) => await call("library", {}, expectedUserId) as Library,
+        current,
+      );
+      if (!verified || !current()) return null;
+      accountUserId.current = verified.session.userId;
+      setAccountEmail(verified.session.email || "");
+      setLibrary(verified.library);
+      return verified.library;
     },
     [call],
   );
@@ -130,7 +144,7 @@ export default function Tracker({
         sessionUncertain = checked?.uncertain === true;
         sessionError = checked?.error;
         const selected: Mode = authenticated ? "cloud" : "guest";
-        const data = selected === "guest" ? null : (await call("library")) as Library;
+        const data = selected === "guest" ? null : (await call("library", {}, checked?.session?.userId)) as Library;
         if (!active || currentGeneration !== generation.current) return;
         if (selected === "cloud") {
           const session = await getAuthenticatedSession();
@@ -146,6 +160,7 @@ export default function Tracker({
         }
         if (active && currentGeneration === generation.current) {
           setAccountEmail(verifiedAccountEmail);
+          accountUserId.current = selected === "cloud" ? checked?.session?.userId || null : null;
           modeRef.current = selected;
           setMode(selected);
           setLibrary(data);
@@ -188,8 +203,18 @@ export default function Tracker({
     [library, now],
   );
   const followed = library?.follows.map((x) => x.seriesId) || [];
-  const supportedIds = new Set((library?.series || []).filter((series) => isSupportedPlatform(series.platform)).map((series) => series.id));
-  const activeCount = library?.follows.filter((x) => !x.paused && supportedIds.has(x.seriesId)).length || 0;
+  const fullPriorityOrder = useMemo(
+    () => sortFollowIds(library?.follows || [], library?.series || [], library?.priorityOrder || [], "priority"),
+    [library],
+  );
+  const recommendation = recommendedCandidate(queue.ready, fullPriorityOrder);
+  const visibleFollowIds = useMemo(() => {
+    if (!library) return [];
+    const visible = new Set(filterFollowIds(library.follows, queue, listFilter, queue.thisWeek.map((candidate) => candidate.series.id)));
+    return sortFollowIds(library.follows, library.series, fullPriorityOrder, listSort).filter((id) => visible.has(id));
+  }, [fullPriorityOrder, library, listFilter, listSort, queue]);
+  const weekCount = queue.thisWeek.length;
+  const activeCount = library?.follows.filter((follow) => !follow.paused).length || 0;
 
   function markLibraryRefresh(value: boolean) {
     needsLibraryRefreshRef.current = value;
@@ -224,7 +249,7 @@ export default function Tracker({
   async function perform(
     action: string,
     payload: Record<string, unknown>,
-    message: string,
+    message: string | ((writeResult: unknown) => string),
   ) {
     const selectedMode = modeRef.current;
     if (selectedMode === "guest") {
@@ -243,8 +268,13 @@ export default function Tracker({
     setNotice("");
     setDialogError("");
     try {
+      let writeResult: unknown;
       const result = await runLibraryOperation(
-        () => call(action, payload),
+        async () => {
+          const expectedUserId = accountUserId.current;
+          if (!expectedUserId) throw new CloudActionError("账号会话已变化，请刷新并确认当前账号。", "ACCOUNT_CHANGED");
+          writeResult = await call(action, payload, expectedUserId);
+        },
         async () => {
           if (!current()) throw new Error("账号已切换");
           const data = await reload();
@@ -256,7 +286,7 @@ export default function Tracker({
       if (!current()) return false;
       if (result.kind === "saved") {
         markLibraryRefresh(false);
-        setNotice(message);
+        setNotice(typeof message === "function" ? message(writeResult) : message);
         return true;
       }
       if (result.kind === "saved-unrefreshed") {
@@ -280,6 +310,33 @@ export default function Tracker({
       mutationLock.current = false;
       if (current()) setBusy(false);
     }
+  }
+  async function movePriority(seriesId: string, direction: -1 | 1) {
+    if (!library || listFilter !== "all" || listSort !== "priority" || busy || needsLibraryRefreshRef.current) return;
+    const index = fullPriorityOrder.indexOf(seriesId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= fullPriorityOrder.length) return;
+    const next = [...fullPriorityOrder];
+    [next[index], next[target]] = [next[target], next[index]];
+    await perform("reorder", {
+      seriesIds: next,
+      expectedMembershipVersion: library.membershipVersion ?? 0,
+      expectedOrderVersion: library.orderVersion ?? 0,
+    }, "优先级顺序已保存。");
+  }
+  async function movePriorityBefore(sourceId: string, targetId: string) {
+    if (!library || sourceId === targetId || listFilter !== "all" || listSort !== "priority" || busy || needsLibraryRefreshRef.current) return;
+    const next = [...fullPriorityOrder];
+    const source = next.indexOf(sourceId);
+    const target = next.indexOf(targetId);
+    if (source < 0 || target < 0) return;
+    next.splice(source, 1);
+    next.splice(target, 0, sourceId);
+    await perform("reorder", {
+      seriesIds: next,
+      expectedMembershipVersion: library.membershipVersion ?? 0,
+      expectedOrderVersion: library.orderVersion ?? 0,
+    }, "优先级顺序已保存。");
   }
   function openLogin(event: React.MouseEvent<HTMLButtonElement>) {
     loginTrigger.current = event.currentTarget;
@@ -320,20 +377,16 @@ export default function Tracker({
   }
   async function loadVerifiedLibrary() {
     const currentGeneration = generation.current;
-    const identity = await getAuthenticatedSession();
-    if (!mounted.current || currentGeneration !== generation.current) return;
-    if (!identity) throw new Error("当前没有有效的邮箱账号会话，请重新登录。");
-    const data = await cloudCall("library", {}) as Library;
-    if (!mounted.current || currentGeneration !== generation.current) return;
-    const session = await getAuthenticatedSession();
-    if (!mounted.current || currentGeneration !== generation.current) return;
-    if (
-      !session ||
-      session.userId !== identity.userId ||
-      !libraryBelongsToUser(data, identity.userId)
-    )
-      throw new Error("账号会话已变化，请重新加载当前账号记录。");
+    const current = () => mounted.current && currentGeneration === generation.current;
+    const verified = await readVerifiedLibrary(
+      getAuthenticatedSession,
+      async (expectedUserId) => await cloudCall("library", {}, expectedUserId) as Library,
+      current,
+    );
+    if (!verified || !current()) return;
+    const { library: data, session } = verified;
     setAccountEmail(session.email || "");
+    accountUserId.current = session.userId;
     generation.current++;
     markLibraryRefresh(false);
     modeRef.current = "cloud";
@@ -391,6 +444,7 @@ export default function Tracker({
     try {
       await endCloudSession((await cloudApp()).auth(), () => {
         generation.current++;
+        accountUserId.current = null;
         markLibraryRefresh(false);
         setPendingAccount(false);
         setNeedsLibraryRetry(false);
@@ -413,6 +467,7 @@ export default function Tracker({
     try {
       const clear = () => {
         generation.current++;
+        accountUserId.current = null;
         markLibraryRefresh(false);
         modeRef.current = "guest";
         setMode("guest");
@@ -516,7 +571,6 @@ export default function Tracker({
         <nav className="tracker-nav" aria-label="主导航">
           {(
             [
-              ["watch", "现在看什么", Play],
               ["library", "我的追番", Bookmark],
               ["catalog", "国漫合集", Search],
             ] as const
@@ -582,24 +636,10 @@ export default function Tracker({
                   <div>
                     <div className="eyebrow">
                       <span />
-                      {view === "watch" ? "从你的观看记录出发" : "你的故事进度"}
+                      你的故事进度
                     </div>
-                    <h1>
-                      {view === "watch" ? (
-                        <>
-                          现在，<span>看什么？</span>
-                        </>
-                      ) : (
-                        <>
-                          我的<span>追番。</span>
-                        </>
-                      )}
-                    </h1>
-                    <p>
-                      {view === "watch"
-                        ? "把已更新、还没看、想继续的故事，放在一起。"
-                        : "记住看到哪里，下次接着看。"}
-                    </p>
+                    <h1>我的<span>追番。</span></h1>
+                    <p>记住看到哪里，下次接着看。</p>
                   </div>
                   {mode !== "guest" && (
                     <button
@@ -638,263 +678,153 @@ export default function Tracker({
                   </section>
                 ) : (
                   <>
-                    <div className="watch-stats">
-                      <div>
-                        <strong>{activeCount}</strong>
-                        <span>正在追番</span>
-                      </div>
-                      <div>
-                        <strong>{queue.ready.length}</strong>
-                        <span>有未看内容</span>
-                      </div>
-                      <div>
-                        <strong>{queue.caughtUp.length}</strong>
-                        <span>已追平</span>
-                      </div>
-                      <div>
-                        <strong>{queue.unknown.length}</strong>
-                        <span>更新待核验</span>
-                      </div>
+                    <div className="watch-stats" aria-label="追番统计与筛选">
+                      {([
+                        ["week", weekCount, "本周更新未看"],
+                        ["unwatched", queue.ready.length, "有未看内容"],
+                        ["active", activeCount, "正在追番"],
+                        ["caught-up", queue.caughtUp.length, "已追平"],
+                      ] as const).map(([key, count, label]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          aria-pressed={listFilter === key}
+                          className={listFilter === key ? "selected" : ""}
+                          onClick={() => setListFilter(listFilter === key ? "all" : key)}
+                        >
+                          <strong>{count}</strong>
+                          <span>{label}</span>
+                        </button>
+                      ))}
                     </div>
-                    {view === "watch" ? (
-                      <>
-                        {queue.ready.length > 0 ? (
-                          <>
-                            <section
-                              className="featured-watch"
-                              aria-label="优先观看"
-                            >
-                              <div className="featured-cover">
-                                {queue.ready[0].series.cover && (
-                                  <img
-                                    src={queue.ready[0].series.cover}
-                                    alt=""
-                                    referrerPolicy="no-referrer"
-                                    onError={(e) => {
-                                      e.currentTarget.style.display = "none";
-                                    }}
-                                  />
-                                )}
-                                <span>
-                                  <Play size={42} />
-                                </span>
-                              </div>
-                              <div className="featured-body">
-                                <span className="small-label">
-                                  {!queue.ready[0].follow.episodeCompleted &&
-                                  queue.ready[0].follow.currentEpisode > 0
-                                    ? "接着上次的故事"
-                                    : "有未看内容"}
-                                </span>
-                                <h2>{queue.ready[0].series.title}</h2>
-                                <p>
-                                  {progressLabel(queue.ready[0].follow)} ·
-                                  已核验至第 {queue.ready[0].latestEpisode} 集
-                                </p>
-                                <div className="next-episode">
-                                  从第 <b>{queue.ready[0].nextEpisode}</b>{" "}
-                                  集继续{" "}
-                                  <span>
-                                    还有 {queue.ready[0].unwatched} 集未看
-                                  </span>
-                                </div>
-                                <PlaybackActions
-                                  candidate={queue.ready[0]}
-                                  busy={busy || needsLibraryRefresh}
-                                  onOpen={openOfficial}
-                                  onEdit={editProgress}
-                                  onComplete={complete}
-                                />
-                                <Verification
-                                  series={queue.ready[0].series}
-                                  stale={queue.ready[0].stale}
-                                />
-                              </div>
-                            </section>
-                            <div className="section-heading">
-                              <h2>其他可以看的</h2>
-                              <span>
-                                {Math.max(0, queue.ready.length - 1)} 部
-                              </span>
-                            </div>
-                            <div className="watch-grid">
-                              {queue.ready.slice(1).map((candidate) => (
-                                <WatchCard
-                                  key={candidate.series.id}
-                                  candidate={candidate}
-                                  busy={busy || needsLibraryRefresh}
-                                  onOpen={openOfficial}
-                                  onEdit={editProgress}
-                                  onComplete={complete}
-                                />
-                              ))}
-                            </div>
-                          </>
-                        ) : (
-                          <EmptyWorkspace
-                            title={
-                              activeCount
-                                ? "当前没有已核验的未看内容"
-                                : "先加入几部想追的国漫"
-                            }
-                            description={
-                              activeCount
-                                ? "已追平的作品和待核验的作品列在下方。"
-                                : "从合集加入追番，设置已看集数，就能生成你的观看清单。"
-                            }
-                            onBrowse={() => setView("catalog")}
-                            onSubmit={openSubmission}
+                    {recommendation ? (
+                      <section className="featured-watch" aria-label="优先推荐观看">
+                        <div className="featured-cover">
+                          {recommendation.series.cover && (
+                            <img
+                              src={recommendation.series.cover}
+                              alt=""
+                              referrerPolicy="no-referrer"
+                              onError={(e) => { e.currentTarget.style.display = "none"; }}
+                            />
+                          )}
+                          <span><Play size={42} /></span>
+                        </div>
+                        <div className="featured-body">
+                          <span className="small-label">
+                            {!recommendation.follow.episodeCompleted && recommendation.follow.currentEpisode > 0
+                              ? "接着上次的故事"
+                              : "有未看内容"}
+                          </span>
+                          <h2>{recommendation.series.title}</h2>
+                          <p>{progressLabel(recommendation.follow)} · 已核验至第 {recommendation.latestEpisode} 集</p>
+                          <div className="next-episode">
+                            从第 <b>{recommendation.nextEpisode}</b> 集继续
+                            <span>还有 {recommendation.unwatched} 集未看</span>
+                          </div>
+                          <PlaybackActions
+                            candidate={recommendation}
+                            busy={busy || needsLibraryRefresh}
+                            onOpen={openOfficial}
+                            onEdit={editProgress}
+                            onComplete={complete}
                           />
-                        )}
-                        {queue.unknown.length > 0 && (
-                          <section className="secondary-list">
-                            <h2>
-                              更新待核验 <span>{queue.unknown.length}</span>
-                            </h2>
-                            <p>
-                              这些作品还没有可靠的最新集数，暂时不计入未看更新。
-                            </p>
-                            {queue.unknown.map((candidate) => (
-                              <WatchCard
-                                key={candidate.series.id}
-                                candidate={candidate}
-                                busy={busy || needsLibraryRefresh}
-                                onOpen={openOfficial}
-                                onEdit={editProgress}
-                                onComplete={complete}
-                              />
-                            ))}
-                          </section>
-                        )}
-                        {queue.caughtUp.length > 0 && (
-                          <section className="caught-up-list">
-                            <h2>已追平</h2>
-                            {queue.caughtUp.map(({ series, follow }) => (
-                              <button
-                                key={series.id}
-                                className="caught-up-item"
-                                onClick={() => editProgress({ series, follow })}
-                              >
-                                <Check size={16} />
-                                {series.title}
-                                <small>{progressLabel(follow)}</small>
-                              </button>
-                            ))}
-                          </section>
-                        )}
-                      </>
+                          <Verification series={recommendation.series} stale={recommendation.stale} />
+                        </div>
+                      </section>
                     ) : (
-                      <>
-                        {!library?.follows.length ? (
-                          <EmptyWorkspace
-                            title="你的追番清单还是空的"
-                            description="从国漫合集找到作品，或补录我们还没有收录的动漫。"
-                            onBrowse={() => setView("catalog")}
-                            onSubmit={openSubmission}
-                          />
-                        ) : (
-                          <div className="library-list">
-                            {library.follows.map((follow) => {
-                              const series = library.series.find(
-                                (x) => x.id === follow.seriesId,
-                              );
-                              if (!series) return null;
-                              const latest = latestPublishedEpisode(
-                                series,
-                                now,
-                              );
+                      <div className="recommendation-empty" role="status">
+                        <h2>{library?.follows.length ? "暂时没有可推荐的未看更新" : "先加入几部想追的国漫"}</h2>
+                        <p>{library?.follows.length ? "待核验作品仍会列在追番清单中；可靠更新到来后会自动出现在这里。" : "从国漫合集加入追番，或补录官方节目链接。"}</p>
+                        {!library?.follows.length && <button className="secondary-action" onClick={() => setView("catalog")}>浏览国漫合集</button>}
+                      </div>
+                    )}
+                    <section className="library-section" aria-labelledby="follow-list-title">
+                      <div className="section-heading library-section-heading">
+                        <h2 id="follow-list-title">我的追番</h2>
+                        <span>{library?.follows.length || 0} 部</span>
+                      </div>
+                      <div className="library-toolbar">
+                        <div className="sort-controls" aria-label="追番列表排序">
+                          <button type="button" aria-pressed={listSort === "priority"} className={listSort === "priority" ? "selected" : ""} onClick={() => setListSort("priority")}>优先级</button>
+                          <button type="button" aria-pressed={listSort === "name"} className={listSort === "name" ? "selected" : ""} onClick={() => setListSort("name")}>名称</button>
+                        </div>
+                        <p>
+                          {listSort === "name"
+                            ? "当前按完整名称拼音排序；切回优先级后可调整顺序。"
+                            : listFilter !== "all"
+                              ? "筛选中，优先级调整已暂停；清除筛选后可调整完整顺序。"
+                              : "拖动手柄，或使用上移、下移按钮调整优先级。"}
+                        </p>
+                      </div>
+                      {visibleFollowIds.length ? (
+                        <div className="library-list">
+                          {visibleFollowIds.map((seriesId, index) => {
+                            const follow = library?.follows.find((item) => item.seriesId === seriesId);
+                            if (!follow) return null;
+                            const series = library?.series.find((item) => item.id === seriesId);
+                            const canReorder = listFilter === "all" && listSort === "priority" && !busy && !needsLibraryRefresh;
+                            if (!series) {
                               return (
-                                <article
-                                  className={`library-row ${isSupportedPlatform(series.platform) ? "" : "unsupported-platform"}`}
-                                  key={series.id}
-                                >
-                                  <div className="library-thumb">
-                                    {series.cover ? (
-                                      <img
-                                        src={series.cover}
-                                        alt=""
-                                        referrerPolicy="no-referrer"
-                                        onError={(e) => {
-                                          e.currentTarget.style.display =
-                                            "none";
-                                        }}
-                                      />
-                                    ) : (
-                                      <ListVideo />
-                                    )}
-                                  </div>
-                                  <div className="library-details">
-                                    <h2>
-                                      {series.title}
-                                      {follow.paused && <small>已暂停</small>}
-                                      {!isSupportedPlatform(series.platform) && <small>平台暂不可用</small>}
-                                    </h2>
-                                    <p>
-                                      {platforms[series.platform]?.name} ·{" "}
-                                      {progressLabel(follow)} ·{" "}
-                                      {latest !== null
-                                        ? `已核验至 ${latest} 集`
-                                        : "最新集数待核验"}
-                                    </p>
-                                    <Verification
-                                      series={series}
-                                      stale={
-                                        now -
-                                          Date.parse(
-                                            series.lastScanAt ||
-                                              series.checkedAt,
-                                          ) >
-                                        2 * 86400000
-                                      }
-                                    />
-                                  </div>
+                                <article key={seriesId} className="library-row missing-series-row">
+                                  <button type="button" className="priority-handle" aria-label={`拖动或调整${seriesId}优先级`} disabled={!canReorder} draggable={canReorder}
+                                    onDragStart={(event) => { draggedSeriesId.current = seriesId; event.dataTransfer.setData("text/plain", seriesId); event.dataTransfer.effectAllowed = "move"; }}>
+                                    <span aria-hidden="true">⠿</span>
+                                  </button>
+                                  <div className="library-thumb"><ListVideo /></div>
+                                  <div className="library-details"><h2>节目资料待同步</h2><p>该追番记录会保留在完整优先级顺序中。</p></div>
                                   <div className="library-actions">
-                                    {isSupportedPlatform(series.platform) ? (
-                                      <a
-                                        className="secondary-action"
-                                        href={series.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        onClick={() => openOfficial(series)}
-                                      >
-                                        官方播放
-                                        <ExternalLink size={13} />
-                                      </a>
-                                    ) : (
-                                      <button className="secondary-action" disabled title="暂不支持该平台">
-                                        平台暂不可用
-                                      </button>
-                                    )}
-                                    <button
-                                      className="secondary-action"
-                                      disabled={busy || needsLibraryRefresh || !isSupportedPlatform(series.platform)}
-                                      onClick={() =>
-                                        editProgress({ series, follow })
-                                      }
-                                    >
-                                      修改进度
-                                    </button>
-                                    <button
-                                      className="text-action"
-                                      disabled={busy || needsLibraryRefresh}
-                                      onClick={() =>
-                                        void perform(
-                                          "unfollow",
-                                          { seriesId: series.id },
-                                          "已移出追番，其他记录不受影响。",
-                                        )
-                                      }
-                                    >
-                                      取消追番
-                                    </button>
+                                    <button type="button" className="text-action" disabled={busy || needsLibraryRefresh} onClick={() => void perform("unfollow", { seriesId }, "已移出追番，其他记录不受影响。")}>取消追番</button>
+                                    <PriorityMoveButtons index={index} count={visibleFollowIds.length} disabled={!canReorder} onMove={(direction) => void movePriority(seriesId, direction)} />
                                   </div>
                                 </article>
                               );
-                            })}
-                          </div>
-                        )}
-                      </>
-                    )}
+                            }
+                            const latest = latestPublishedEpisode(series, now);
+                            const supported = isSupportedPlatform(series.platform);
+                            return (
+                              <article
+                                className={`library-row ${supported ? "" : "unsupported-platform"}`}
+                                key={series.id}
+                                onDragOver={(event) => { if (canReorder && draggedSeriesId.current && draggedSeriesId.current !== seriesId) event.preventDefault(); }}
+                                onDrop={(event) => { event.preventDefault(); const source = draggedSeriesId.current || event.dataTransfer.getData("text/plain"); draggedSeriesId.current = null; if (source) void movePriorityBefore(source, seriesId); }}
+                                onDragEnd={() => { draggedSeriesId.current = null; }}
+                              >
+                                <button type="button" className="priority-handle" aria-label={`拖动调整${series.title}优先级`} disabled={!canReorder} draggable={canReorder}
+                                  onDragStart={(event) => { draggedSeriesId.current = series.id; event.dataTransfer.setData("text/plain", series.id); event.dataTransfer.effectAllowed = "move"; }}>
+                                  <span aria-hidden="true">⠿</span>
+                                </button>
+                                <div className="library-thumb">
+                                  {series.cover ? <img src={series.cover} alt="" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <ListVideo />}
+                                </div>
+                                <div className="library-details">
+                                  <h2>
+                                    {series.title}
+                                    {follow.paused && <small>已暂停</small>}
+                                    {!supported && <small>平台暂不可用</small>}
+                                    {series.metadataPending && <small>名称待核验</small>}
+                                  </h2>
+                                  <p>
+                                    {platforms[series.platform]?.name || "平台待识别"} · {progressLabel(follow)} · {latest !== null ? `已核验至 ${latest} 集` : "最新集数待核验"}
+                                  </p>
+                                  <Verification series={series} stale={now - Date.parse(series.lastScanAt || series.checkedAt) > 2 * 86400000} />
+                                </div>
+                                <div className="library-actions">
+                                  {supported ? (
+                                    <a className="secondary-action" href={series.url} target="_blank" rel="noopener noreferrer" onClick={() => openOfficial(series)}>官方播放 <ExternalLink size={13} /></a>
+                                  ) : <button className="secondary-action" disabled title="暂不支持该平台">平台暂不可用</button>}
+                                  <button className="secondary-action" disabled={busy || needsLibraryRefresh || !supported} onClick={() => editProgress({ series, follow })}>修改进度</button>
+                                  <button className="text-action" disabled={busy || needsLibraryRefresh} onClick={() => void perform("unfollow", { seriesId: series.id }, "已移出追番，其他记录不受影响。")}>取消追番</button>
+                                  <PriorityMoveButtons index={index} count={visibleFollowIds.length} disabled={!canReorder} onMove={(direction) => void movePriority(seriesId, direction)} />
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="filter-empty">当前筛选下没有作品。再次点击统计按钮可清除筛选。</p>
+                      )}
+                    </section>
                   </>
                 )}
               </>
@@ -954,7 +884,12 @@ export default function Tracker({
             const success = await perform(
               "submit",
               { url },
-              "已补录并加入追番，等待官方元数据核验。",
+              (result) => {
+                const metadataPending = (result as { series?: { metadataPending?: boolean } } | null)?.series?.metadataPending;
+                return metadataPending
+                  ? "已加入追番，官方标题暂未识别，列表中会标明名称待核验。"
+                  : "已识别官方节目名称并加入追番；最新集数仍待核验。";
+              },
             );
             if (success) {
               setSubmitOpen(false);
@@ -1072,59 +1007,24 @@ function PlaybackActions({
     </div>
   );
 }
-function WatchCard(props: PlaybackProps) {
-  const { candidate } = props;
-  return (
-    <article className="watch-card">
-      <div className="watch-card-heading">
-        <span className="small-label">
-          {platforms[candidate.series.platform]?.name}
-        </span>
-        <span>
-          {candidate.latestEpisode === null
-            ? "待核验"
-            : `${candidate.unwatched} 集未看`}
-        </span>
-      </div>
-      <h3>{candidate.series.title}</h3>
-      <p>
-        {progressLabel(candidate.follow)}
-        {candidate.latestEpisode !== null &&
-          ` · 最新 ${candidate.latestEpisode} 集`}
-      </p>
-      <PlaybackActions {...props} />
-      <Verification series={candidate.series} stale={candidate.stale} />
-    </article>
-  );
-}
-function EmptyWorkspace({
-  title,
-  description,
-  onBrowse,
-  onSubmit,
+function PriorityMoveButtons({
+  index,
+  count,
+  disabled,
+  onMove,
 }: {
-  title: string;
-  description: string;
-  onBrowse: () => void;
-  onSubmit: () => void;
+  index: number;
+  count: number;
+  disabled: boolean;
+  onMove: (direction: -1 | 1) => void;
 }) {
   return (
-    <section className="workspace-empty">
-      <Bookmark size={30} />
-      <h2>{title}</h2>
-      <p>{description}</p>
-      <div className="action-row">
-        <button className="primary-action" onClick={onBrowse}>
-          浏览国漫合集
-        </button>
-        <button className="secondary-action" onClick={onSubmit}>
-          补录动漫
-        </button>
-      </div>
-    </section>
+    <div className="priority-move-buttons" aria-label="调整优先级">
+      <button type="button" aria-label="上移" disabled={disabled || index === 0} onClick={() => onMove(-1)}>上移</button>
+      <button type="button" aria-label="下移" disabled={disabled || index === count - 1} onClick={() => onMove(1)}>下移</button>
+    </div>
   );
 }
-
 function DialogFrame({
   title,
   onClose,

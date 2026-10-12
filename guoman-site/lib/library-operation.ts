@@ -3,7 +3,7 @@ import { CloudActionError } from './cloud-auth.ts';
 const rejectedCodes = new Set([
   'FOLLOW_LIMIT', 'INVALID_ACTION', 'INVALID_PROGRESS', 'INVALID_REQUEST',
   'INVALID_SERIES', 'INVALID_TITLE', 'INVALID_URL', 'NOT_FOLLOWING',
-  'NOT_FOUND', 'RATE_LIMITED', 'UNAUTHENTICATED', 'UNSUPPORTED_PLATFORM', 'CONFLICT',
+  'NOT_FOUND', 'RATE_LIMITED', 'UNAUTHENTICATED', 'UNSUPPORTED_PLATFORM', 'CONFLICT', 'INVALID_ORDER', 'ACCOUNT_CHANGED',
 ]);
 
 /** Only known business denials prove that the server declined the write. */

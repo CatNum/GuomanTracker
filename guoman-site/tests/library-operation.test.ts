@@ -59,3 +59,7 @@ test('unsupported platforms are correctable business rejections without an unkno
   assert.deepEqual(result, { kind: 'rejected', error: rejection });
   assert.equal(refreshes, 0);
 });
+
+test('invalid full-order requests are correctable business rejections without an unknown-write lock', () => {
+  assert.equal(isDefinitiveBusinessRejection(new CloudActionError('排序必须包含本人全部追番', 'INVALID_ORDER')), true);
+});

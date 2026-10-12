@@ -2,12 +2,13 @@ import { createManagementTransport } from './pg-management-transport.mjs';
 import { createPgStore } from './pg-store.mjs';
 import { createUserService } from './user-service.mjs';
 import { readInvocationIdentity } from './invocation-identity.mjs';
+import { resolveOfficialMetadata } from './submission-metadata.mjs';
 
 const unauthenticated = () => ({ ok: false, error: { code: 'UNAUTHENTICATED', message: '请先登录账号。' } });
 const unavailable = () => ({ ok: false, error: { code: 'SERVICE_UNAVAILABLE', message: '云服务暂时不可用，请稍后重试。' } });
 
 /** One handler may cache the static catalog, but all user state belongs to one invocation. */
-export function createPgUserHandler({ app, parseContext, createManager, loadSeed }) {
+export function createPgUserHandler({ app, parseContext, createManager, loadSeed, resolveMetadata = resolveOfficialMetadata }) {
   let seedPromise;
   return async function main(event, context) {
     try {
@@ -17,7 +18,7 @@ export function createPgUserHandler({ app, parseContext, createManager, loadSeed
       const seed = await seedPromise;
       const manager = createManager();
       const store = createPgStore(createManagementTransport(manager, { libraryMode: event?.action === 'library' }));
-      const service = createUserService({ store, seed });
+      const service = createUserService({ store, seed, resolveMetadata });
       let displayName = '我的账号';
       let avatarUrl;
       if (event?.action === 'library') {

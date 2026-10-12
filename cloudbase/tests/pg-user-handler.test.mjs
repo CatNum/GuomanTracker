@@ -32,6 +32,7 @@ test('one handler accepts A then rejects missing, empty and anonymous contexts b
           const hex = /decode\('([0-9a-f]+)', 'hex'\)/.exec(Sql)?.[1];
           assert.ok(hex);
           const args = JSON.parse(Buffer.from(hex, 'hex').toString('utf8'));
+          if (Sql.includes('get_document')) return rpc({ exists: false });
           assert.match(Sql, /^SELECT guoman_private\.list_follows_page\(/);
           owners.push(args.owner);
           return rpc({ documents: [], related: [], next_after: '' });
