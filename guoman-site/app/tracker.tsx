@@ -49,6 +49,7 @@ import { applyConfirmedMembership, applyConfirmedReorder, isDefinitiveBusinessRe
 import { libraryBelongsToUser, readVerifiedLibrary } from "@/lib/library-identity";
 
 import { clearLibrarySnapshot, readLibrarySnapshot, saveLibrarySnapshot } from "@/lib/library-snapshot";
+import { openEpisodePlayback } from "@/lib/episode-playback";
 
 const snapshotStorage = {
   getItem: (key: string) => window.sessionStorage.getItem(key),
@@ -89,6 +90,7 @@ export default function Tracker({
       follow: WatchState;
     } | null>(null);
   const busy = saving || loading;
+  const [jumping, setJumping] = useState<{ series: Anime; episode: number } | null>(null);
   const [pendingMutation, setPendingMutation] = useState<{ action: string; seriesId: string } | null>(null);
   const [pendingCatalogFollowId, setPendingCatalogFollowId] = useState("");
   const [dialogError, setDialogError] = useState("");
@@ -301,6 +303,7 @@ export default function Tracker({
       if (needsLibraryRefreshRef.current) {
         markLibraryRefresh(false);
         setEditing(null);
+        setJumping(null);
         setSubmitOpen(false);
       }
       setPendingAccount(false);
@@ -481,6 +484,7 @@ export default function Tracker({
     setPendingAccount(false);
     setNeedsLibraryRetry(false);
     setEditing(null);
+    setJumping(null);
     setSubmitOpen(false);
     setLoginOpen(false);
     setChallenge(null);
@@ -531,6 +535,7 @@ export default function Tracker({
         generation.current++;
         if (accountUserId.current) clearLibrarySnapshot(snapshotStorage, accountUserId.current);
         accountUserId.current = null;
+        setJumping(null);
         setCatalogAccountKey("");
         modeRef.current = "guest";
         setMode("guest");
@@ -559,6 +564,7 @@ export default function Tracker({
         generation.current++;
         if (accountUserId.current) clearLibrarySnapshot(snapshotStorage, accountUserId.current);
         accountUserId.current = null;
+        setJumping(null);
         setCatalogAccountKey("");
         markLibraryRefresh(false);
         modeRef.current = "guest";
@@ -802,6 +808,7 @@ export default function Tracker({
                               busy={busy}
                               blocked={needsLibraryRefresh}
                               onOpen={openOfficial}
+                              onJump={(series, episode) => onEditProgress(() => setJumping({ series, episode }))}
                               onEdit={(data) => onEditProgress(() => editProgress(data))}
                               onComplete={complete}
                             />
@@ -916,6 +923,7 @@ export default function Tracker({
                                   {supported ? (
                                     <a className="secondary-action" href={series.url} target="_blank" rel="noopener noreferrer" onClick={() => openOfficial(series)}>官方播放 <ExternalLink size={13} /></a>
                                   ) : <button className="secondary-action" disabled title="暂不支持该平台">平台暂不可用</button>}
+                                  {supported && <button type="button" className="secondary-action" onClick={() => setJumping({ series, episode: Math.max(1, follow.currentEpisode + Number(follow.episodeCompleted)) })}>跳转集数</button>}
                                   <OperationButton className="secondary-action" busy={busy} disabled={needsLibraryRefresh || !supported} onClick={() => editProgress({ series, follow })}>修改进度</OperationButton>
                                   <OperationButton className="text-action unfollow-action" busy={busy} disabled={needsLibraryRefresh} aria-busy={pendingMutation?.action === "unfollow" && pendingMutation.seriesId === series.id} onClick={() => void perform("unfollow", { seriesId: series.id }, "已移出追番，其他记录不受影响。")}>{pendingMutation?.action === "unfollow" && pendingMutation.seriesId === series.id ? "正在取消…" : "取消追番"}</OperationButton>
                                   <PriorityMoveButtons index={index} count={visibleFollowIds.length} busy={busy} disabled={!reorderAllowed} onMove={(direction) => void movePriority(seriesId, direction)} />
@@ -1007,6 +1015,17 @@ export default function Tracker({
           }}
         />
       )}
+      {jumping && mode === "cloud" && library && (
+        <EpisodeJumpDialog
+          key={`${library.user.uid}:${jumping.series.id}`}
+          series={jumping.series}
+          initialEpisode={jumping.episode}
+          onClose={() => setJumping(null)}
+          onResolve={(episode) => call("resolveEpisode", { url: jumping.series.url, episode }, library.user.uid)}
+          isCurrentAccount={() => modeRef.current === "cloud" && accountUserId.current === library.user.uid}
+          onOpened={() => openOfficial(jumping.series)}
+        />
+      )}
       {editing && (
         <ProgressDialog
           series={editing.series}
@@ -1068,6 +1087,7 @@ type PlaybackProps = {
   busy: boolean;
   blocked: boolean;
   onOpen: (series: Anime) => void;
+  onJump: (series: Anime, episode: number) => void;
   onEdit: (data: { series: Anime; follow: WatchState }) => void;
   onComplete: (series: Anime, follow: WatchState) => void;
 };
@@ -1076,6 +1096,7 @@ function PlaybackActions({
   busy,
   blocked,
   onOpen,
+  onJump,
   onEdit,
   onComplete,
 }: PlaybackProps) {
@@ -1096,6 +1117,11 @@ function PlaybackActions({
           : "观看"}
         <ExternalLink size={14} />
       </a> : <button className="primary-action" disabled>平台暂不可用</button>}
+      {isSupportedPlatform(candidate.series.platform) && <button
+        type="button"
+        className="secondary-action"
+        onClick={() => onJump(candidate.series, candidate.nextEpisode)}
+      >跳转集数</button>}
       {candidate.unwatched > 0 && (
         <OperationButton
           className="secondary-action"
@@ -1253,6 +1279,68 @@ function SubmissionDialog({
         >
           {busy ? "正在提交…" : "补录并追番"}
         </button>
+      </form>
+    </DialogFrame>
+  );
+}
+function EpisodeJumpDialog({ series, initialEpisode, onClose, onResolve, isCurrentAccount, onOpened }: {
+  series: Anime;
+  initialEpisode: number;
+  onClose: () => void;
+  onResolve: (episode: number) => Promise<unknown>;
+  isCurrentAccount: () => boolean;
+  onOpened: () => void;
+}) {
+  const [episode, setEpisode] = useState(String(initialEpisode));
+  const [resolving, setResolving] = useState(false);
+  const [error, setError] = useState("");
+  const [resolved, setResolved] = useState<{ episode: number; url: string } | null>(null);
+  const active = useRef(true);
+  const request = useRef(0);
+  const pendingWindow = useRef<Window | null>(null);
+  const episodeInput = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    active.current = true;
+    episodeInput.current?.focus();
+    return () => { active.current = false; pendingWindow.current?.close(); };
+  }, []);
+  const numericEpisode = Number(episode);
+  const valid = /^\d{1,5}$/u.test(episode.trim()) && Number.isSafeInteger(numericEpisode) && numericEpisode >= 1 && numericEpisode <= 10000;
+  async function jump(event: React.FormEvent) {
+    event.preventDefault();
+    if (!valid || resolving) return;
+    const id = ++request.current;
+    const current = () => active.current && id === request.current && isCurrentAccount();
+    setResolving(true);
+    setError("");
+    setResolved(null);
+    try {
+      const url = await openEpisodePlayback({ platform: series.platform, episode: numericEpisode,
+        openWindow: () => (pendingWindow.current = window.open("about:blank", "_blank")),
+        resolve: () => onResolve(numericEpisode), isActive: current, onOpened });
+      if (url && current()) setResolved({ episode: numericEpisode, url });
+    } catch (error) {
+      if (current()) setError(errorText(error));
+    } finally {
+      pendingWindow.current = null;
+      if (current()) setResolving(false);
+    }
+  }
+  return (
+    <DialogFrame title="跳转到指定集数" onClose={() => { active.current = false; request.current++; pendingWindow.current?.close(); onClose(); }}>
+      <p className="dialog-description">{series.title} · {platforms[series.platform]?.name}</p>
+      <form onSubmit={jump}>
+        <label htmlFor="jump-episode">想看第几集</label>
+        <input ref={episodeInput} id="jump-episode" autoFocus type="number" inputMode="numeric" required min={1} max={10000} step={1}
+          value={episode} disabled={resolving} onChange={(event) => { setEpisode(event.target.value); setError(""); setResolved(null); }} />
+        <p className="field-note">输入正片集号，在新标签页打开官方单集。观看进度由你手动确认。</p>
+        {error && <p role="alert" className="form-error">{error}</p>}
+        <button type="submit" className="primary-action" disabled={resolving || !valid} aria-busy={resolving}>
+          {resolving ? "正在查找官方单集…" : `跳转到第 ${valid ? numericEpisode : "…"} 集`}
+          <ExternalLink size={14} />
+        </button>
+        {resolved && <p role="status" className="field-note">链接已就绪。如未自动打开，<a href={resolved.url} target="_blank" rel="noopener noreferrer" onClick={onOpened}>点击观看第 {resolved.episode} 集</a>。</p>}
+        {error && <a className="secondary-action" href={series.url} target="_blank" rel="noopener noreferrer" onClick={onOpened}>前往官方作品页选集 <ExternalLink size={14} /></a>}
       </form>
     </DialogFrame>
   );

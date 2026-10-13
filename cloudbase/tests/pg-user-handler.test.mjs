@@ -77,3 +77,37 @@ test('getCatalog requires trusted non-anonymous identity and never constructs th
   assert.equal(reads, 1);
   assert.equal(managers, 0);
 });
+
+test('resolveEpisode validates input and identity without loading the database or catalog', async () => {
+  let resolves = 0;
+  const handle = createPgUserHandler({
+    parseContext,
+    createManager: () => { throw new Error('episode lookup must not access PG'); },
+    loadSeed: async () => { throw new Error('episode lookup must not load the seed'); },
+    resolveEpisode: async (url, episode) => {
+      resolves++;
+      assert.equal(url, 'https://www.bilibili.com/bangumi/play/ss28747');
+      assert.equal(episode, 1);
+      return { episode: 1, url: 'https://www.bilibili.com/bangumi/play/ep733316' };
+    },
+  });
+  const payload = { url: 'https://www.bilibili.com/bangumi/play/ss28747', episode: 1 };
+  for (const context of [undefined, {}, contextFor('anonymous', 'true')]) {
+    assert.equal((await handle({ action: 'resolveEpisode', payload }, context)).error.code, 'UNAUTHENTICATED');
+  }
+  for (const invalid of [null, [], {}, { ...payload, episode: 0 }, { ...payload, episode: '1' }, { ...payload, owner: 'forged' }]) {
+    assert.equal((await handle({ action: 'resolveEpisode', payload: invalid }, contextFor('alice'))).error.code, 'INVALID_REQUEST');
+  }
+  assert.deepEqual(await handle({ action: 'resolveEpisode', payload }, contextFor('alice')), { ok: true, data: { episode: 1, url: 'https://www.bilibili.com/bangumi/play/ep733316' } });
+  assert.equal(resolves, 1);
+});
+
+test('resolveEpisode returns a safe unavailable result for upstream failures', async () => {
+  const handle = createPgUserHandler({
+    parseContext,
+    resolveEpisode: async () => { throw new Error('private upstream response'); },
+  });
+  const result = await handle({ action: 'resolveEpisode', payload: { url: 'https://www.bilibili.com/bangumi/play/ss28747', episode: 1 } }, contextFor('alice'));
+  assert.equal(result.error.code, 'EPISODE_UNAVAILABLE');
+  assert.doesNotMatch(result.error.message, /private/);
+});

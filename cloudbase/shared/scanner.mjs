@@ -13,6 +13,7 @@ function fault(code, message) {
 
 function permittedFetchUrl(input, platform) {
   const parsed = new URL(input);
+  if (platform === 'tencent' && input === 'https://pbaccess.video.qq.com/trpc.vector_layout.page_view.PageService/getPage?video_appid=3000010&vversion_platform=2&vversion_name=8.5.96') return input;
   if (platform === 'bilibili' && parsed.origin === 'https://api.bilibili.com' && parsed.pathname === '/pgc/view/web/season' && !parsed.username && !parsed.password) {
     const params = [...parsed.searchParams.entries()];
     if (params.length !== 1 || !['season_id', 'ep_id'].includes(params[0][0]) || !/^[1-9]\d*$/u.test(params[0][1])) throw fault('INVALID_URL', '官网 API 地址不符合预期。');
@@ -25,14 +26,14 @@ function permittedFetchUrl(input, platform) {
 }
 
 /** Reads only bounded text/JSON from validated official endpoints, checking every redirect. */
-export async function fetchMetadata(input, { fetcher = fetch, timeoutMs = 8000, maxBytes = 2 * 1024 * 1024, maxRedirects = 3, platform } = {}) {
+export async function fetchMetadata(input, { fetcher = fetch, timeoutMs = 8000, maxBytes = 2 * 1024 * 1024, maxRedirects = 3, platform, method = 'GET', body } = {}) {
   const chosenPlatform = platform || normalizeOfficialUrl(input).platform;
   let url = permittedFetchUrl(input, chosenPlatform);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     for (let attempt = 0; attempt <= maxRedirects; attempt += 1) {
-      const response = await fetcher(url, { redirect: 'manual', signal: controller.signal, headers: { accept: 'application/json,text/html;q=0.9', 'user-agent': 'GuomanTracker-Metadata/0.2 (metadata only)' } });
+      const response = await fetcher(url, { method, body, redirect: 'manual', signal: controller.signal, headers: { accept: 'application/json,text/html;q=0.9', 'user-agent': 'GuomanTracker-Metadata/0.2 (metadata only)', ...(body ? { 'content-type': 'application/json' } : {}) } });
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
         await response.body?.cancel();
