@@ -23,7 +23,7 @@ test('one handler accepts A then rejects missing, empty and anonymous contexts b
     const handle = createPgUserHandler({
       app: { auth: () => ({
         getUserInfo: () => { throw new Error('SDK merged identity must not be used'); },
-        getEndUserInfo: async () => { profiles++; return {}; },
+        getEndUserInfo: async () => { profiles++; throw new Error('Optional profile service is unavailable'); },
       }) },
       parseContext,
       createManager: () => {
@@ -45,12 +45,12 @@ test('one handler accepts A then rejects missing, empty and anonymous contexts b
     for (const context of [undefined, {}, contextFor('anonymous', 'true')]) {
       assert.equal((await handle(forged, context)).error.code, 'UNAUTHENTICATED');
       assert.equal(managers, 1);
-      assert.equal(profiles, 1);
+      assert.equal(profiles, 0);
     }
     assert.equal((await handle(forged, contextFor('bob'))).ok, true);
     assert.deepEqual(owners, ['alice', 'bob']);
     assert.equal(managers, 2);
-    assert.equal(profiles, 2);
+    assert.equal(profiles, 0);
     assert.equal(seedLoads, 1);
   } finally {
     if (previousUid === undefined) delete process.env.TCB_UUID;

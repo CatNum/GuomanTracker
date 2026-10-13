@@ -8,7 +8,7 @@ const unauthenticated = () => ({ ok: false, error: { code: 'UNAUTHENTICATED', me
 const unavailable = () => ({ ok: false, error: { code: 'SERVICE_UNAVAILABLE', message: '云服务暂时不可用，请稍后重试。' } });
 
 /** One handler may cache the static catalog, but all user state belongs to one invocation. */
-export function createPgUserHandler({ app, parseContext, createManager, loadSeed, getCatalog, resolveMetadata = resolveOfficialMetadata }) {
+export function createPgUserHandler({ parseContext, createManager, loadSeed, getCatalog, resolveMetadata = resolveOfficialMetadata }) {
   let seedPromise;
   return async function main(event, context) {
     try {
@@ -26,19 +26,8 @@ export function createPgUserHandler({ app, parseContext, createManager, loadSeed
       const manager = createManager();
       const store = createPgStore(createManagementTransport(manager, { libraryMode: event?.action === 'library' }));
       const service = createUserService({ store, seed, resolveMetadata });
-      let displayName = '我的账号';
-      let avatarUrl;
-      if (event?.action === 'library') {
-        try {
-          const auth = app.auth();
-          if (typeof auth.getEndUserInfo === 'function') {
-            const profile = await auth.getEndUserInfo(trusted.uid);
-            displayName = profile?.userInfo?.nickName || displayName;
-            avatarUrl = profile?.userInfo?.avatarUrl;
-          }
-        } catch { /* Optional profile metadata does not block account operations. */ }
-      }
-      return await service(event, { uid: trusted.uid, displayName, avatarUrl, isAnonymous: trusted.isAnonymous });
+      // Account identity is already verified; optional profile RPC must not delay records.
+      return await service(event, { uid: trusted.uid, displayName: '我的账号', isAnonymous: trusted.isAnonymous });
     } catch {
       return unavailable();
     }

@@ -6,6 +6,8 @@ import { createUserService } from '../shared/user-service.mjs';
 import { createCloudbaseStore } from '../shared/cloudbase-store.mjs';
 import { latestPublishedEpisode } from '../shared/published-episode.mjs';
 import { CommitUnconfirmedError } from '../shared/pg-store.mjs';
+import { normalizeOfficialUrl } from '../shared/official-links.mjs';
+import { resolveOfficialMetadata } from '../shared/submission-metadata.mjs';
 
 test('SCF CommonJS entry exposes its callable index.main without loading network dependencies', () => {
   const require = createRequire(import.meta.url);
@@ -52,7 +54,7 @@ const seed = [{ id: 'bili-seed', title: '已收录国漫', platform: 'bilibili',
 function setup(start = '2026-10-05T00:00:00.000Z') {
   const store = new MemoryStore();
   let clock = new Date(start);
-  const service = createUserService({ store, seed, now: () => clock });
+  const service = createUserService({ store, seed, now: () => clock, resolveMetadata: async () => ({ title: '官方测试节目' }) });
   const call = (uid, action, payload = {}, extra = {}) => service({ action, payload, ...extra }, { uid, displayName: uid });
   return { store, call, advance: (milliseconds = 86400000) => { clock = new Date(clock.getTime() + milliseconds); } };
 }
@@ -81,12 +83,13 @@ test('known official links preserve catalog identifiers and repeated submissions
   assert.equal((await call('bob', 'library')).data.follows.length, 1);
 });
 
-test('official-link-only submissions preserve known titles and use a pending title for new shows', async () => {
+test('official-link-only submissions preserve known titles and save resolved titles for new shows', async () => {
   const { call } = setup();
   const known = await call('alice', 'submit', { url: seed[0].url });
   assert.equal(known.data.series.title, '已收录国漫');
   const fresh = await call('alice', 'submit', { url: 'https://www.bilibili.com/bangumi/play/ss456' });
-  assert.equal(fresh.data.series.title, 'B站待核验节目 ss456');
+  assert.equal(fresh.data.series.title, '官方测试节目');
+  assert.equal(fresh.data.series.metadataPending, false);
   assert.equal(fresh.data.series.episodes, '待核验');
   assert.equal(fresh.data.series.monitoring, 'queued');
 });
@@ -155,20 +158,130 @@ test('daily submit, follow, and monitor quotas reject new links before metadata 
   assert.equal(monitorCalls, 0);
 });
 
-test('metadata resolution failure keeps a clear pending title and permits a later submission', async () => {
+test('metadata resolution failure writes nothing and a later successful retry saves once', async () => {
   const store = new MemoryStore();
-  let calls = 0;
-  const service = createUserService({ store, seed, resolveMetadata: async () => { calls++; throw new Error('timeout'); } });
+  let available = false;
+  const service = createUserService({ store, seed, resolveMetadata: async () => {
+    if (!available) throw new Error('PRIVATE_TIMEOUT_DETAIL');
+    return { title: '官方节目名称' };
+  } });
   const call = (action, payload) => service({ action, payload }, { uid: 'alice' });
   const url = 'https://www.bilibili.com/bangumi/play/ss457';
   const failed = await call('submit', { url });
-  assert.equal(failed.ok, true);
-  assert.equal(failed.data.series.title, 'B站待核验节目 ss457');
-  assert.equal(failed.data.series.metadataPending, true);
-  assert.equal(calls, 1);
+  assert.deepEqual(failed, { ok: false, error: { code: 'METADATA_UNAVAILABLE', message: '补录失败：未能识别官方节目名称，本次未保存任何更改。请稍后重试或使用该节目的其他官方链接。' } });
+  assert.equal(store.maps.size, 0);
+  available = true;
   const repeated = await call('submit', { url });
-  assert.equal(repeated.data.series.title, 'B站待核验节目 ss457');
-  assert.equal(calls, 1);
+  assert.equal(repeated.ok, true);
+  assert.equal(repeated.data.series.title, '官方节目名称');
+  assert.equal(repeated.data.series.metadataPending, false);
+  assert.equal((await store.listFollows('alice')).length, 1);
+  assert.equal([...store.maps.values()].find(value => value.kind === 'quota').count, 1);
+  assert.equal([...store.maps.values()].find(value => value.kind === 'scan-quota').count, 1);
+});
+
+test('all supported platforms reject unrecognized official responses without writes', async (t) => {
+  const cases = [
+    ['bilibili', 'https://www.bilibili.com/bangumi/play/ss457', '{"code":-404}', 'application/json'],
+    ['tencent', 'https://v.qq.com/x/cover/mcv8hkc8zk8lnov/x0036x5qqsr.html', '<title>腾讯视频</title>', 'text/html'],
+    ['youku', 'https://v.youku.com/v_show/id_XMzEyMzQ1.html', '<title>优酷</title>', 'text/html'],
+  ];
+  for (const [platform, url, body, contentType] of cases) await t.test(platform, async () => {
+    const store = new MemoryStore();
+    const service = createUserService({ store, resolveMetadata: official => resolveOfficialMetadata(official, {
+      fetcher: async () => new Response(body, { headers: { 'content-type': contentType } }),
+    }) });
+    const result = await service({ action: 'submit', payload: { url, title: '用户自填名称不能替代官方识别' } }, { uid: 'alice' });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'METADATA_UNAVAILABLE');
+    assert.equal(store.maps.size, 0);
+  });
+});
+
+test('all supported platforms save only resolved official titles while episode verification stays separate', async (t) => {
+  const cases = [
+    ['bilibili', 'https://www.bilibili.com/bangumi/play/ss457', '{"code":0,"result":{"title":"官方国创","episodes":[]}}', 'application/json', '官方国创'],
+    ['tencent', 'https://v.qq.com/x/cover/mcv8hkc8zk8lnov.html', '<meta property="og:title" content="完美世界 - 腾讯视频">', 'text/html', '完美世界'],
+    ['youku', 'https://v.youku.com/v_show/id_XMzEyMzQ1.html', '<title>师兄啊师兄_优酷</title>', 'text/html', '师兄啊师兄'],
+  ];
+  for (const [platform, url, body, contentType, title] of cases) await t.test(platform, async () => {
+    const store = new MemoryStore();
+    const service = createUserService({ store, resolveMetadata: official => resolveOfficialMetadata(official, {
+      fetcher: async () => new Response(body, { headers: { 'content-type': contentType } }),
+    }) });
+    const result = await service({ action: 'submit', payload: { url } }, { uid: 'alice' });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.series.title, title);
+    assert.equal(result.data.series.metadataPending, false);
+    assert.equal(result.data.series.episodes, '待核验');
+    assert.equal((await store.listFollows('alice')).length, 1);
+  });
+});
+
+test('missing resolver and empty metadata cannot create a submission', async (t) => {
+  for (const metadata of [undefined, null, {}, { title: '' }, { title: '   ' }]) await t.test(JSON.stringify(metadata) ?? 'missing resolver', async () => {
+    const store = new MemoryStore();
+    const service = createUserService({ store, ...(metadata === undefined ? {} : { resolveMetadata: async () => metadata }) });
+    const result = await service({ action: 'submit', payload: { url: 'https://www.bilibili.com/bangumi/play/ss457' } }, { uid: 'alice' });
+    assert.equal(result.error?.code, 'METADATA_UNAVAILABLE');
+    assert.equal(store.maps.size, 0);
+  });
+});
+
+test('legacy pending submissions are retried and only repaired when official resolution succeeds', async () => {
+  const store = new MemoryStore();
+  const official = normalizeOfficialUrl('https://v.qq.com/x/cover/mcv8hkc8zk8lnov.html');
+  const legacy = { ...seed[0], id: official.id, url: official.url, platform: 'tencent', title: '腾讯视频待核验节目 mcv8hkc8zk8lnov', metadataPending: true };
+  await store.put('guoman_series', official.id, legacy);
+  let available = false;
+  const service = createUserService({ store, resolveMetadata: async () => available ? { title: '完美世界', cover: 'https://img.example.test/cover.jpg' } : null });
+  const call = () => service({ action: 'submit', payload: { url: official.url } }, { uid: 'alice' });
+  const before = structuredClone(store.maps);
+  assert.equal((await call()).error?.code, 'METADATA_UNAVAILABLE');
+  assert.deepEqual(store.maps, before);
+  available = true;
+  const result = await call();
+  assert.equal(result.ok, true);
+  assert.equal(result.data.series.title, '完美世界');
+  assert.equal(result.data.series.metadataPending, false);
+  assert.equal((await store.get('guoman_series', official.id)).title, '完美世界');
+  assert.equal((await store.listFollows('alice')).length, 1);
+});
+
+test('retrying an already followed pending record preserves progress and quotas on failure and repair', async () => {
+  const { call, store } = setup();
+  const url = 'https://www.bilibili.com/bangumi/play/ss456';
+  const added = await call('alice', 'submit', { url });
+  const id = added.data.series.id;
+  const legacy = { ...added.data.series, title: 'B站待核验节目 ss456', metadataPending: true };
+  await store.put('guoman_series', id, legacy);
+  let available = false;
+  const service = createUserService({ store, resolveMetadata: async () => available ? { title: '识别后的官方名称' } : null });
+  const retry = () => service({ action: 'submit', payload: { url } }, { uid: 'alice' });
+  const before = structuredClone(store.maps);
+  assert.equal((await retry()).error?.code, 'METADATA_UNAVAILABLE');
+  assert.deepEqual(store.maps, before);
+  available = true;
+  assert.equal((await retry()).data.series.title, '识别后的官方名称');
+  assert.deepEqual(await store.listFollows('alice'), [ { ...added.data.follow, owner: 'alice', kind: 'follow' } ]);
+  for (const [key, value] of before) if (!key.startsWith('guoman_series/')) assert.deepEqual(store.maps.get(key), value);
+});
+
+test('a title becoming pending during submission is rejected at the transaction boundary without writes', async () => {
+  const store = new MemoryStore();
+  const official = normalizeOfficialUrl('https://www.bilibili.com/bangumi/play/ss457');
+  const confirmed = { ...seed[0], id: official.id, url: official.url };
+  await store.put('guoman_series', official.id, confirmed);
+  const transaction = store.transaction.bind(store);
+  store.transaction = async callback => {
+    await store.put('guoman_series', official.id, { ...confirmed, metadataPending: true });
+    return transaction(callback);
+  };
+  const service = createUserService({ store });
+  const result = await service({ action: 'submit', payload: { url: official.url } }, { uid: 'alice' });
+  assert.equal(result.error?.code, 'METADATA_UNAVAILABLE');
+  assert.equal(store.maps.size, 1);
+  assert.equal((await store.listFollows('alice')).length, 0);
 });
 
 test('membership stats preserve unknown fields and increment only on real follow changes', async () => {
@@ -514,4 +627,43 @@ test('legacy cloud records retain completed counts and convert partial seconds o
   state = (await call('alice', 'library')).data.follows[0];
   assert.equal(state.currentEpisode, 3);
   assert.equal(state.episodeCompleted, true);
+});
+
+
+test('membership writes return committed versions and order without an extra library read', async () => {
+  const { call } = setup();
+  const added = await call('alice', 'follow', { seriesId: 'bili-seed' });
+  assert.deepEqual(added.data.libraryPatch, {
+    beforeMembershipVersion: 0, beforeOrderVersion: 0,
+    membershipVersion: 1, orderVersion: 0, priorityOrder: ['bili-seed'],
+  });
+  assert.equal(added.data.series.id, 'bili-seed');
+  const repeated = await call('alice', 'follow', { seriesId: 'bili-seed' });
+  assert.equal(repeated.data.libraryPatch.beforeMembershipVersion, 1);
+  assert.equal(repeated.data.libraryPatch.membershipVersion, 1);
+  const removed = await call('alice', 'unfollow', { seriesId: 'bili-seed' });
+  assert.deepEqual(removed.data.libraryPatch, {
+    beforeMembershipVersion: 1, beforeOrderVersion: 0,
+    membershipVersion: 2, orderVersion: 0, priorityOrder: [],
+  });
+  assert.deepEqual((await call('alice', 'library')).data.follows, []);
+});
+
+test('following starts independent transaction reads together instead of waiting on each network hop', async () => {
+  const { call, store } = setup();
+  await call('alice', 'follow', { seriesId: 'bili-seed' });
+  const originalGet = store.get.bind(store);
+  const waiting = [];
+  let released = false;
+  store.get = async (...args) => {
+    if (!released) await new Promise(resolve => waiting.push(resolve));
+    return originalGet(...args);
+  };
+  const pending = call('alice', 'follow', { seriesId: 'bili-seed' });
+  await new Promise(resolve => setImmediate(resolve));
+  const simultaneousReads = waiting.length;
+  released = true;
+  waiting.forEach(resolve => resolve());
+  assert.equal((await pending).ok, true);
+  assert.equal(simultaneousReads, 5);
 });

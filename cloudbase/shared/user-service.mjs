@@ -46,6 +46,9 @@ export function createUserService({ store, seed = [], now = () => new Date(), re
     return { order, followCount: needsCount ? existing.length : stats.followCount };
   }
   const resolveInFlight = new Map();
+  const hasConfirmedTitle = (series, official) => typeof series?.title === 'string'
+    && Boolean(series.title.trim()) && series.metadataPending !== true
+    && series.title !== pendingSeriesTitle(official);
   async function resolveNewMetadata(official) {
     if (typeof resolveMetadata !== 'function') return null;
     if (!resolveInFlight.has(official.id)) {
@@ -70,10 +73,11 @@ export function createUserService({ store, seed = [], now = () => new Date(), re
     if (!follow || follow.owner !== uid || follow.kind !== 'follow') reject('NOT_FOLLOWING', '请先追番，再记录观看进度。');
   }
   const ownedFollow = (follow, uid) => follow?.owner === uid && follow.kind === 'follow';
-  async function readLimits(tx, uid, previous, target, date, legacyFollowCount = 0) {
+  async function readLimits(tx, uid, previous, target, date, legacyFollowCount = 0, known) {
     const day = chinaDay(date);
-    const stats = await tx.get(COLLECTIONS.watch, statsId(uid));
-    const scanQuota = await tx.get(COLLECTIONS.watch, scanQuotaId(uid, day));
+    const [stats, scanQuota] = known ? [known.stats, known.scanQuota] : await Promise.all([
+      tx.get(COLLECTIONS.watch, statsId(uid)), tx.get(COLLECTIONS.watch, scanQuotaId(uid, day)),
+    ]);
     const isNewFollow = !ownedFollow(previous, uid);
     const followCount = stats?.followCount ?? legacyFollowCount;
     if (isNewFollow && followCount >= 500) reject('FOLLOW_LIMIT', '最多同时追番 500 部，请先取消部分追番。');
@@ -81,21 +85,28 @@ export function createUserService({ store, seed = [], now = () => new Date(), re
     return { day, stats, scanQuota, isNewFollow };
   }
   async function writeLimits(tx, uid, limits, target, series, official, at) {
+    let nextStats = limits.stats;
     if (limits.isNewFollow) {
       const previousOrder = Array.isArray(limits.stats?.priorityOrder) ? validOrder(limits.stats.priorityOrder) : (limits.legacyOrder || []);
       const priorityOrder = previousOrder.includes(series.id) ? previousOrder : [...previousOrder, series.id];
-      await tx.put(COLLECTIONS.watch, statsId(uid), {
+      nextStats = {
         ...(limits.stats ?? {}), kind: 'stats', owner: uid,
         followCount: (limits.stats?.followCount ?? limits.legacyFollowCount ?? 0) + 1,
         priorityOrder,
         membershipVersion: membershipVersion(limits.stats) + 1,
         orderVersion: orderVersion(limits.stats),
-      });
+      };
+      await tx.put(COLLECTIONS.watch, statsId(uid), nextStats);
     }
     if (!target) {
       await tx.put(COLLECTIONS.watch, scanQuotaId(uid, limits.day), { kind: 'scan-quota', owner: uid, day: limits.day, count: (limits.scanQuota?.count ?? 0) + 1 });
       await tx.put(COLLECTIONS.targets, series.id, { id: series.id, seriesId: series.id, url: official.url, platform: official.platform, source: 'user', status: 'queued', nextScanAt: at, failureCount: 0 });
     } else if (target.source !== 'user') await tx.put(COLLECTIONS.targets, series.id, { ...target, source: 'user' });
+    return nextStats;
+  }
+  function libraryPatch(before, after) {
+    return { beforeMembershipVersion: membershipVersion(before), beforeOrderVersion: orderVersion(before),
+      membershipVersion: membershipVersion(after), orderVersion: orderVersion(after), priorityOrder: validOrder(after?.priorityOrder) };
   }
   function seriesIdFrom(payload) {
     if (typeof payload.seriesId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(payload.seriesId)) reject('INVALID_SERIES', '节目编号无效。');
@@ -162,7 +173,10 @@ export function createUserService({ store, seed = [], now = () => new Date(), re
           ? statsBefore.followCount
           : legacySnapshot?.followCount ?? 0;
         if (!ownedFollow(previousBefore, uid) && followCountBefore >= 500) reject('FOLLOW_LIMIT', '最多同时追番 500 部，请先取消部分追番。');
-        const resolvedMetadata = isNewBeforeTransaction ? await resolveNewMetadata(official) : null;
+        const needsMetadata = !hasConfirmedTitle(known ?? existingBeforeTransaction, official);
+        const resolvedMetadata = needsMetadata ? await resolveNewMetadata(official) : null;
+        const metadataFailure = () => reject('METADATA_UNAVAILABLE', '补录失败：未能识别官方节目名称，本次未保存任何更改。请稍后重试或使用该节目的其他官方链接。');
+        if (needsMetadata && !resolvedMetadata) metadataFailure();
         if (!legacySnapshot) legacySnapshot = await legacyFollowSnapshot(uid, statsBefore);
         data = await store.transaction(async (tx) => {
           const stored = await tx.get(COLLECTIONS.series, seriesId);
@@ -175,9 +189,16 @@ export function createUserService({ store, seed = [], now = () => new Date(), re
           limits.legacyFollowCount = legacySnapshot?.followCount ?? 0;
           const isNew = !stored && !known;
           if (isNew && (quota?.count ?? 0) >= 10) reject('RATE_LIMITED', '今天已补录 10 部新动漫，请明天再试。');
-          const series = { ...(stored ?? known ?? { id: seriesId, title: resolvedMetadata?.title ?? pendingSeriesTitle(official), platform: official.platform, url: official.url, cover: resolvedMetadata?.cover ?? '', status: 'unknown', episodes: '待核验', events: [], checkedAt: at, source: official.url, metadataPending: !resolvedMetadata }), ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}) };
+          const existing = stored ?? known;
+          const needsRepair = !hasConfirmedTitle(existing, official);
+          if (needsRepair && !resolvedMetadata) metadataFailure();
+          const series = {
+            ...(existing ?? { id: seriesId, platform: official.platform, url: official.url, status: 'unknown', episodes: '待核验', events: [], checkedAt: at, source: official.url }),
+            ...(needsRepair ? { ...resolvedMetadata, metadataPending: false } : {}),
+            ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}),
+          };
           const follow = previous?.owner === uid && previous.kind === 'follow' ? normalizeEpisodeProgress(previous) : newFollow(uid, seriesId, at);
-          if (!stored || !target) await tx.put(COLLECTIONS.series, seriesId, series);
+          if (!stored || !target || needsRepair) await tx.put(COLLECTIONS.series, seriesId, series);
           if (isNew) {
             await tx.put(COLLECTIONS.watch, quotaKey, { kind: 'quota', owner: uid, day: chinaDay(date), count: (quota?.count ?? 0) + 1 });
           }
@@ -213,39 +234,46 @@ export function createUserService({ store, seed = [], now = () => new Date(), re
         });
       } else if (['follow', 'unfollow', 'progress', 'open'].includes(event?.action)) {
         const seriesId = seriesIdFrom(payload);
-        const legacySnapshot = ['follow', 'unfollow'].includes(event.action) ? await legacyFollowSnapshot(uid) : null;
         data = await store.transaction(async (tx) => {
-          const previous = await tx.get(COLLECTIONS.watch, followId(uid, seriesId));
-          const series = await lookupSeries(seriesId, tx);
+          const membershipAction = ['follow', 'unfollow'].includes(event.action);
+          const [previous, series, stats, target, scanQuota] = await Promise.all([
+            tx.get(COLLECTIONS.watch, followId(uid, seriesId)),
+            event.action === 'unfollow' ? null : lookupSeries(seriesId, tx),
+            membershipAction ? tx.get(COLLECTIONS.watch, statsId(uid)) : null,
+            event.action === 'follow' ? tx.get(COLLECTIONS.targets, seriesId) : null,
+            event.action === 'follow' ? tx.get(COLLECTIONS.watch, scanQuotaId(uid, chinaDay(date))) : null,
+          ]);
+          const legacySnapshot = membershipAction ? await legacyFollowSnapshot(uid, stats) : null;
           if (event.action === 'unfollow') {
+            let nextStats = stats;
             if (ownedFollow(previous, uid)) {
-              const stats = await tx.get(COLLECTIONS.watch, statsId(uid));
               await tx.remove(COLLECTIONS.watch, followId(uid, seriesId));
-              await tx.put(COLLECTIONS.watch, statsId(uid), {
+              nextStats = {
                 ...(stats ?? {}), kind: 'stats', owner: uid,
                 followCount: Math.max(0, (stats?.followCount ?? legacySnapshot?.followCount ?? 1) - 1),
                 priorityOrder: (Array.isArray(stats?.priorityOrder) ? validOrder(stats.priorityOrder) : (legacySnapshot?.order || [])).filter((id) => id !== seriesId),
                 membershipVersion: membershipVersion(stats) + 1,
                 orderVersion: orderVersion(stats),
-              });
+              };
+              await tx.put(COLLECTIONS.watch, statsId(uid), nextStats);
             }
-            return { seriesId };
+            return { seriesId, libraryPatch: libraryPatch(stats, nextStats) };
           }
           if (!series) reject('NOT_FOUND', '目录中没有这部动漫，请先补录官方链接。');
           if (event.action !== 'unfollow' && !isSupportedPlatform(series.platform)) reject('UNSUPPORTED_PLATFORM', '目前仅支持哔哩哔哩、腾讯视频和优酷。');
           if (event.action === 'follow') {
-            const target = await tx.get(COLLECTIONS.targets, seriesId);
-            const limits = await readLimits(tx, uid, previous, target, date, legacySnapshot?.followCount ?? 0);
+            const limits = await readLimits(tx, uid, previous, target, date, legacySnapshot?.followCount ?? 0, { stats, scanQuota });
             limits.legacyOrder = legacySnapshot?.order ?? null;
             limits.legacyFollowCount = legacySnapshot?.followCount ?? 0;
             let official;
             try { official = normalizeOfficialUrl(series.url); } catch { reject('INVALID_URL', '这个节目暂时没有可监控的官网链接，请补录有效链接。'); }
             const follow = previous?.owner === uid && previous.kind === 'follow' ? normalizeEpisodeProgress(previous) : newFollow(uid, seriesId, at);
             const stored = await tx.get(COLLECTIONS.series, seriesId);
-            if (!stored || !target) await tx.put(COLLECTIONS.series, seriesId, { ...series, ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}) });
-            await writeLimits(tx, uid, limits, target, series, official, at);
+            const confirmedSeries = { ...series, ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}) };
+            if (!stored || !target) await tx.put(COLLECTIONS.series, seriesId, confirmedSeries);
+            const nextStats = await writeLimits(tx, uid, limits, target, series, official, at);
             await tx.put(COLLECTIONS.watch, followId(uid, seriesId), follow);
-            return cleanFollow(follow);
+            return { ...cleanFollow(follow), series: cleanSeries(confirmedSeries), libraryPatch: libraryPatch(stats, nextStats) };
           }
           requireOwned(previous, uid);
           if (event.action === 'open') {

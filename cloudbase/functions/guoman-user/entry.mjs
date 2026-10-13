@@ -4,7 +4,6 @@ import { readFile } from 'node:fs/promises';
 import { createPgUserHandler } from '../../shared/pg-user-handler.mjs';
 import { createCatalogService } from '../../shared/catalog-service.mjs';
 
-const app = cloudbase.init({ env: cloudbase.SYMBOL_CURRENT_ENV });
 const envId = 'guoman-d1goxm3hhb53752a4';
 let seedPromise;
 const loadSeed = async () => {
@@ -18,7 +17,6 @@ const loadSeed = async () => {
 const catalogService = createCatalogService({ loadSeed });
 
 export const main = createPgUserHandler({
-  app,
   parseContext: cloudbase.parseContext,
   loadSeed,
   getCatalog: catalogService.getCatalog,
