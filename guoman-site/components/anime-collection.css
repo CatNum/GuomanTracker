@@ -1,0 +1,49 @@
+.anime-display-toggle { display:inline-flex; flex-shrink:0; gap:3px; padding:3px; border:1px solid #37432f; border-radius:8px; background:#172019; }
+.anime-display-toggle button { display:inline-flex; align-items:center; justify-content:center; gap:6px; border:0; border-radius:5px; padding:6px 10px; background:transparent; color:#9eaf9b; font-size:12px; white-space:nowrap; }
+.anime-display-toggle button[aria-pressed=true] { background:#324528; color:#c5f56b; }
+.anime-display-toggle button:hover { color:#e5efdc; }
+.anime-collection { gap:16px; }
+.anime-collection-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,160px),1fr)); align-items:stretch; }
+.anime-collection-list { display:flex; flex-direction:column; }
+.anime-entry { position:relative; min-width:0; border:1px solid #333e2d; border-radius:10px; overflow:hidden; background:#1b241c; }
+.anime-entry:hover { border-color:#607c4c; }
+.anime-entry-cover { display:block; flex-shrink:0; min-width:0; }
+.anime-entry-poster { position:relative; aspect-ratio:3/4; overflow:hidden; background:#293729; }
+.anime-entry-fallback { position:absolute; inset:0; display:grid; place-items:center; color:#879c79; }
+.anime-entry-poster img { position:relative; width:100%; height:100%; object-fit:cover; display:block; }
+.anime-entry-platform { position:absolute; left:8px; top:8px; padding:3px 6px; border-radius:4px; background:#111d; font-size:11px; }
+.anime-entry-cover-label { position:absolute; bottom:0; left:0; right:0; padding:20px 9px 9px; background:linear-gradient(transparent,#111e); color:#fff; font-size:12px; }
+.anime-entry-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:46px; height:46px; border-radius:50%; display:grid; place-items:center; background:#c5f56b; color:#152009; opacity:0; }
+a.anime-entry-cover:hover .anime-entry-play,a.anime-entry-cover:focus-visible .anime-entry-play { opacity:1; }
+.anime-entry-body { min-width:0; }
+.anime-entry-body>h2 { margin:0 0 9px; font-size:16px; line-height:1.5; overflow-wrap:anywhere; }
+.anime-entry-body>h2 small { display:inline-block; font-size:11px; margin-left:8px; color:#a5a788; }
+.anime-entry-actions { min-width:0; }
+.anime-entry-leading>button { width:36px; }
+.anime-collection-grid .anime-entry { display:flex; flex-direction:column; }
+.anime-collection-grid .anime-entry-body { padding:13px 12px; flex:1; }
+.anime-collection-grid .anime-entry-actions { padding:0 12px 13px; }
+.anime-collection-grid .anime-entry-leading { position:absolute; right:8px; top:8px; z-index:2; }
+.anime-collection-grid .anime-entry-leading>button { background:#152010dd; }
+.anime-collection-list .anime-entry { display:flex; align-items:center; gap:18px; padding:17px; }
+.anime-collection-list .anime-entry-cover { width:63px; border-radius:5px; overflow:hidden; }
+.anime-collection-list .anime-entry-body { flex:1; }
+.anime-collection-list .anime-entry-body>h2 { font-size:19px; }
+.anime-collection-list .anime-entry-platform,.anime-collection-list .anime-entry-cover-label,.anime-collection-list .anime-entry-play { display:none; }
+.anime-collection-list .anime-entry-actions { flex-shrink:1; max-width:50%; }
+.anime-entry.unsupported-platform .anime-entry-cover,.anime-entry.unsupported-platform .anime-entry-body { opacity:.52; }
+.anime-entry.unsupported-platform .anime-entry-actions { opacity:.7; }
+@media(max-width:700px) {
+  .anime-collection { gap:12px; }
+  .anime-collection-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .anime-collection-list .anime-entry { flex-wrap:wrap; gap:12px; padding:12px; }
+  .anime-collection-list .anime-entry-cover { width:50px; }
+  .anime-collection-list .anime-entry-body>h2 { font-size:17px; }
+  .anime-collection-list .anime-entry-actions { flex-basis:100%; max-width:100%; padding-left:62px; }
+  .anime-collection-list .anime-entry-leading~.anime-entry-actions { padding-left:0; }
+  .anime-entry-body>h2 { font-size:15px; }
+}
+@container workspace (max-width:700px) {
+  .anime-collection-list .anime-entry { flex-wrap:wrap; }
+  .anime-collection-list .anime-entry-actions { flex-basis:100%; max-width:100%; }
+}

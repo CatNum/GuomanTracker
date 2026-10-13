@@ -1,0 +1,17 @@
+/* 页面业务内容对共用展示插槽的适配，独立于展示组件。 */
+.anime-entry-actions .follow-button { margin:0; width:100%; }
+.anime-collection-grid .library-actions { padding:0; width:100%; gap:7px; }
+.anime-collection-grid .library-actions .secondary-action { font-size:11px; padding:6px 8px; }
+.anime-entry-catalog-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px 12px; margin-top:8px; color:#8c9c8e; font-size:12px; }
+.anime-entry-catalog-meta a { display:inline-flex; align-items:center; gap:5px; color:#c5f56b; }
+.catalog-display-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0 19px; }
+.catalog-display-toolbar .live-note { margin:0; }
+.library-toolbar { flex-wrap:wrap; }
+.library-toolbar p { flex:1; min-width:180px; }
+@media(max-width:700px) {
+  .catalog-display-toolbar { align-items:flex-start; }
+  .anime-collection-list .library-actions { padding:0; }
+}
+@container workspace (max-width:700px) {
+  .anime-collection-list .library-actions { padding:0; }
+}

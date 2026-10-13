@@ -21,6 +21,8 @@ import {
 import Catalog from "./catalog";
 import RecommendationDeck from "@/components/recommendation-deck";
 import { OperationButton } from "@/components/operation-button";
+import { AnimeCollection, AnimeEntry, AnimeDisplayToggle } from "@/components/anime-collection";
+import { useAnimeDisplayMode } from "@/hooks/use-anime-display-mode";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { isSupportedPlatform, platforms, type Anime } from "@/lib/catalog";
@@ -82,6 +84,7 @@ export default function Tracker({
   const [statsHelpOpen, setStatsHelpOpen] = useState(false);
   const [listFilter, setListFilter] = useState<WatchFilter>("all");
   const [listSort, setListSort] = useState<FollowSort>("priority");
+  const [displayMode, setDisplayMode] = useAnimeDisplayMode("list");
   const [saving, setBusy] = useState(false),
     [loading, setLoading] = useState(true),
     [submitOpen, setSubmitOpen] = useState(false),
@@ -855,6 +858,7 @@ export default function Tracker({
                         <span>{library?.follows.length || 0} 部</span>
                       </div>
                       <div className="library-toolbar">
+                        <AnimeDisplayToggle mode={displayMode} onChange={setDisplayMode} />
                         <div className="sort-controls" aria-label="追番列表排序">
                           <button type="button" aria-pressed={listSort === "priority"} className={listSort === "priority" ? "selected" : ""} onClick={() => setListSort("priority")}>优先级</button>
                           <button type="button" aria-pressed={listSort === "name"} className={listSort === "name" ? "selected" : ""} onClick={() => setListSort("name")}>名称</button>
@@ -868,7 +872,7 @@ export default function Tracker({
                         </p>
                       </div>
                       {visibleFollowIds.length ? (
-                        <div className="library-list">
+                        <AnimeCollection mode={displayMode}>
                           {visibleFollowIds.map((seriesId, index) => {
                             const follow = library?.follows.find((item) => item.seriesId === seriesId);
                             if (!follow) return null;
@@ -876,50 +880,37 @@ export default function Tracker({
                             const canReorder = reorderAllowed && !busy;
                             if (!series) {
                               return (
-                                <article key={seriesId} className="library-row missing-series-row">
-                                  <OperationButton type="button" className="priority-handle" aria-label={`拖动或调整${seriesId}优先级`} busy={busy} disabled={!reorderAllowed} draggable={canReorder}
+                                <AnimeEntry key={seriesId} title="节目资料待同步" className="missing-series-row"
+                                  leading={<OperationButton type="button" className="priority-handle" aria-label={`拖动或调整${seriesId}优先级`} busy={busy} disabled={!reorderAllowed} draggable={canReorder}
                                     onDragStart={(event) => { draggedSeriesId.current = seriesId; event.dataTransfer.setData("text/plain", seriesId); event.dataTransfer.effectAllowed = "move"; }}>
                                     <span aria-hidden="true">⠿</span>
-                                  </OperationButton>
-                                  <div className="library-thumb"><ListVideo /></div>
-                                  <div className="library-details"><h2>节目资料待同步</h2><p>该追番记录会保留在完整优先级顺序中。</p></div>
-                                  <div className="library-actions">
+                                  </OperationButton>}
+                                  actions={<div className="library-actions">
                                     <OperationButton type="button" className="text-action unfollow-action" busy={busy} disabled={needsLibraryRefresh} aria-busy={pendingMutation?.action === "unfollow" && pendingMutation.seriesId === seriesId} onClick={() => void perform("unfollow", { seriesId }, "已移出追番，其他记录不受影响。")}>{pendingMutation?.action === "unfollow" && pendingMutation.seriesId === seriesId ? "正在取消…" : "取消追番"}</OperationButton>
                                     <PriorityMoveButtons index={index} count={visibleFollowIds.length} busy={busy} disabled={!reorderAllowed} onMove={(direction) => void movePriority(seriesId, direction)} />
-                                  </div>
-                                </article>
+                                  </div>}
+                                >
+                                  <div className="library-details"><p>该追番记录会保留在完整优先级顺序中。</p></div>
+                                </AnimeEntry>
                               );
                             }
                             const latest = latestPublishedEpisode(series, now);
                             const supported = isSupportedPlatform(series.platform);
                             return (
-                              <article
-                                className={`library-row ${supported ? "" : "unsupported-platform"}`}
+                              <AnimeEntry
+                                title={series.title}
+                                cover={series.cover}
+                                titleExtras={<>{follow.paused && <small>已暂停</small>}{!supported && <small>平台暂不可用</small>}{series.metadataPending && <small>名称待核验</small>}</>}
+                                className={supported ? "" : "unsupported-platform"}
                                 key={series.id}
                                 onDragOver={(event) => { if (canReorder && draggedSeriesId.current && draggedSeriesId.current !== seriesId) event.preventDefault(); }}
                                 onDrop={(event) => { event.preventDefault(); const source = draggedSeriesId.current || event.dataTransfer.getData("text/plain"); draggedSeriesId.current = null; if (source) void movePriorityBefore(source, seriesId); }}
                                 onDragEnd={() => { draggedSeriesId.current = null; }}
-                              >
-                                <OperationButton type="button" className="priority-handle" aria-label={`拖动调整${series.title}优先级`} busy={busy} disabled={!reorderAllowed} draggable={canReorder}
+                                leading={<OperationButton type="button" className="priority-handle" aria-label={`拖动调整${series.title}优先级`} busy={busy} disabled={!reorderAllowed} draggable={canReorder}
                                   onDragStart={(event) => { draggedSeriesId.current = series.id; event.dataTransfer.setData("text/plain", series.id); event.dataTransfer.effectAllowed = "move"; }}>
                                   <span aria-hidden="true">⠿</span>
-                                </OperationButton>
-                                <div className="library-thumb">
-                                  {series.cover ? <img src={series.cover} alt="" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <ListVideo />}
-                                </div>
-                                <div className="library-details">
-                                  <h2>
-                                    {series.title}
-                                    {follow.paused && <small>已暂停</small>}
-                                    {!supported && <small>平台暂不可用</small>}
-                                    {series.metadataPending && <small>名称待核验</small>}
-                                  </h2>
-                                  <p>
-                                    {platforms[series.platform]?.name || "平台待识别"} · {progressLabel(follow)} · {latest !== null ? `已核验至 ${latest} 集` : "最新集数待核验"}
-                                  </p>
-                                  <Verification series={series} stale={now - Date.parse(series.lastScanAt || series.checkedAt) > 2 * 86400000} />
-                                </div>
-                                <div className="library-actions">
+                                </OperationButton>}
+                                actions={<div className="library-actions">
                                   {supported ? (
                                     <a className="secondary-action" href={series.url} target="_blank" rel="noopener noreferrer" onClick={() => openOfficial(series)}>官方播放 <ExternalLink size={13} /></a>
                                   ) : <button className="secondary-action" disabled title="暂不支持该平台">平台暂不可用</button>}
@@ -927,11 +918,18 @@ export default function Tracker({
                                   <OperationButton className="secondary-action" busy={busy} disabled={needsLibraryRefresh || !supported} onClick={() => editProgress({ series, follow })}>修改进度</OperationButton>
                                   <OperationButton className="text-action unfollow-action" busy={busy} disabled={needsLibraryRefresh} aria-busy={pendingMutation?.action === "unfollow" && pendingMutation.seriesId === series.id} onClick={() => void perform("unfollow", { seriesId: series.id }, "已移出追番，其他记录不受影响。")}>{pendingMutation?.action === "unfollow" && pendingMutation.seriesId === series.id ? "正在取消…" : "取消追番"}</OperationButton>
                                   <PriorityMoveButtons index={index} count={visibleFollowIds.length} busy={busy} disabled={!reorderAllowed} onMove={(direction) => void movePriority(seriesId, direction)} />
+                                </div>}
+                              >
+                                <div className="library-details">
+                                  <p>
+                                    {platforms[series.platform]?.name || "平台待识别"} · {progressLabel(follow)} · {latest !== null ? `已核验至 ${latest} 集` : "最新集数待核验"}
+                                  </p>
+                                  <Verification series={series} stale={now - Date.parse(series.lastScanAt || series.checkedAt) > 2 * 86400000} />
                                 </div>
-                              </article>
+                              </AnimeEntry>
                             );
                           })}
-                        </div>
+                        </AnimeCollection>
                       ) : (
                         <p className="filter-empty">当前筛选下没有作品。再次点击统计按钮可清除筛选。</p>
                       )}

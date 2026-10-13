@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "@/components/anime-collection.css";
+import "./anime-display.css";
 
 export const metadata: Metadata = {
   title: "国漫追番 · 要看什么与新番周历",
