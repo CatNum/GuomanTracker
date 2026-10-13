@@ -1,0 +1,858 @@
+<!DOCTYPE html><html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>动漫播放看板 - 扑克牌层叠卡组抽取</title>
+<!-- Tailwind CSS v3 -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              dark: '#141e17',
+              darker: '#0c150f',
+              surface: '#1b291f',
+              accent: '#a3e635', // neon lime
+              accentHover: '#bef264',
+              secondaryBtn: '#243528',
+              borderLight: '#2e4133',
+              subtext: '#829786',
+            }
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei"', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+<!-- BEGIN: Custom Styles -->
+<style data-purpose="custom-layout-and-depth">
+    body {
+      background-color: #0c150f;
+      color: #e5e7eb;
+    }
+
+    /* 3D Perspective Deck Stage */
+    .deck-perspective {
+      perspective: 1400px;
+      perspective-origin: 50% 60%;
+    }
+
+    /* Base Poker Card Transition & Feel */
+    .poker-card {
+      transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.25, 1),
+                  box-shadow 0.45s cubic-bezier(0.2, 0.8, 0.25, 1),
+                  border-color 0.3s ease,
+                  opacity 0.4s ease;
+      transform-style: preserve-3d;
+      will-change: transform, box-shadow;
+    }
+
+    /* Natural Resting Fan Layout (Baseline: 后一张牌自然覆盖在前一张牌之上，严格符合从左到右层叠) */
+    .card-slot-0 {
+      transform: translate3d(-240px, 45px, 0px) rotate(-8deg);
+      z-index: 10;
+    }
+    .card-slot-1 {
+      transform: translate3d(-120px, 20px, 0px) rotate(-4deg);
+      z-index: 20;
+    }
+    .card-slot-2 {
+      transform: translate3d(0px, 10px, 0px) rotate(0deg);
+      z-index: 30;
+    }
+    .card-slot-3 {
+      transform: translate3d(120px, 20px, 0px) rotate(4deg);
+      z-index: 40;
+    }
+    .card-slot-4 {
+      transform: translate3d(240px, 45px, 0px) rotate(8deg);
+      z-index: 50;
+    }
+
+    /* Ready-to-Draw State: 向上拔出约 1/3，符合物理空间约束：
+       只压住排在它前面的卡，绝对不压住排在它后面的卡！
+       Slot 0: z-index 15 (压住自身基底10，但低于Slot 1的20)
+       Slot 1: z-index 25 (压住Slot 0的10/15，但低于Slot 2的30)
+       Slot 2: z-index 35 (压住Slot 1的20/25，但低于Slot 3的40)
+       Slot 3: z-index 45 (压住Slot 2的30/35，但低于Slot 4的50)
+       Slot 4: z-index 55 (最顶层卡拔起)
+    */
+    .card-slot-0.is-ready {
+      transform: translate3d(-240px, -115px, 0px) rotate(-3deg) scale(1.03);
+      z-index: 15;
+    }
+    .card-slot-1.is-ready {
+      transform: translate3d(-120px, -130px, 0px) rotate(-1.5deg) scale(1.03);
+      z-index: 25;
+    }
+    .card-slot-2.is-ready {
+      transform: translate3d(0px, -140px, 0px) rotate(0deg) scale(1.03);
+      z-index: 35;
+    }
+    .card-slot-3.is-ready {
+      transform: translate3d(120px, -130px, 0px) rotate(1.5deg) scale(1.03);
+      z-index: 45;
+    }
+    .card-slot-4.is-ready {
+      transform: translate3d(240px, -115px, 0px) rotate(3deg) scale(1.03);
+      z-index: 55;
+    }
+
+    /* Glow & Highlight for Ready Card */
+    .poker-card.is-ready {
+      box-shadow: 0 35px 50px -12px rgba(0, 0, 0, 0.9),
+                  0 0 35px 4px rgba(163, 230, 53, 0.45),
+                  inset 0 1px 1px 0 rgba(255, 255, 255, 0.2);
+      border-color: rgba(163, 230, 53, 0.85) !important;
+    }
+
+    /* Drawing animation triggered when clicked again (真正抽飞时才升至全局顶层) */
+    .poker-card.is-drawing {
+      animation: drawFlipOut 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      pointer-events: none;
+      z-index: 99 !important;
+    }
+
+    @keyframes drawFlipOut {
+      0% {
+        transform: translate3d(var(--tw-translate-x, 0), -125px, 60px) rotateY(0deg) scale(1.03);
+        opacity: 1;
+      }
+      40% {
+        transform: translate3d(0, -220px, 150px) rotateY(70deg) scale(1.15);
+        opacity: 0.95;
+      }
+      100% {
+        transform: translate3d(0, -280px, 260px) rotateY(180deg) scale(1.22);
+        opacity: 0;
+      }
+    }
+
+    /* Modal Animation */
+    .modal-backdrop-transition {
+      transition: opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .modal-card-transition {
+      transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
+    }
+
+    /* Collapsible Navigation Transition */
+    .sidebar-transition {
+      transition: width 0.35s cubic-bezier(0.2, 0.8, 0.25, 1),
+                  padding 0.35s cubic-bezier(0.2, 0.8, 0.25, 1);
+    }
+    .nav-label-fade {
+      transition: opacity 0.25s ease, max-width 0.35s cubic-bezier(0.2, 0.8, 0.25, 1);
+    }
+    #sidebar-rail.is-collapsed .nav-label-fade {
+      opacity: 0;
+      max-width: 0;
+      overflow: hidden;
+      margin-left: 0;
+      pointer-events: none;
+    }
+    #sidebar-rail:not(.is-collapsed) .nav-label-fade {
+      opacity: 1;
+      max-width: 140px;
+    }
+  </style>
+<!-- END: Custom Styles -->
+</head>
+<body class="min-h-screen flex items-center justify-center p-3 sm:p-6 lg:p-10 antialiased font-sans select-none overflow-x-hidden">
+<!-- BEGIN: Main Showcase Container -->
+<!-- BEGIN: Integrated Mini Navigation Capsule Rail (左侧一体化微型悬浮导轨：支持展开与收缩) -->
+<aside class="sidebar-transition hidden md:flex flex-col items-center justify-between py-5 px-3 bg-[#08100a]/90 backdrop-blur-xl border border-[#233527]/70 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_25px_rgba(163,230,53,0.06)] mr-5 shrink-0 z-20 self-stretch min-h-[720px] is-collapsed w-[72px]" data-purpose="integrated-icon-rail" id="sidebar-rail">
+<!-- Top: Brand Logo & Collapse Toggle -->
+<div class="flex flex-col items-center gap-3 w-full">
+<div class="flex items-center justify-between w-full px-1">
+<a class="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#1a291f] to-[#0e1711] border border-lime-400/30 flex items-center justify-center text-lime-400 shadow-[0_0_15px_rgba(163,230,53,0.2)] hover:scale-105 hover:border-lime-400/60 transition-all duration-300 group shrink-0" href="#" title="Obsidian Grove 追番平台">
+<svg class="w-5 h-5 fill-current transition-transform duration-300 group-hover:rotate-12" viewBox="0 0 24 24">
+<path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+</svg>
+</a>
+<!-- Brand Title (Visible when expanded) -->
+<div class="nav-label-fade flex flex-col justify-center ml-2.5 whitespace-nowrap overflow-hidden">
+<span class="text-xs font-black tracking-wider text-lime-400 uppercase font-mono">OBSIDIAN</span>
+<span class="text-[10px] text-gray-400 font-medium">GROVE ANIME</span>
+</div>
+<!-- Toggle Collapse Button -->
+<button class="w-7 h-7 rounded-lg bg-[#142318] hover:bg-[#1f3524] text-gray-400 hover:text-lime-400 border border-[#233827] flex items-center justify-center transition-all ml-auto shrink-0 shadow-sm" id="sidebar-toggle-btn" title="展开侧边栏" type="button">
+<svg class="w-3.5 h-3.5 stroke-current stroke-2 fill-none transition-transform duration-300" id="sidebar-toggle-icon" viewBox="0 0 24 24" style="transform: rotate(0deg);">
+<polyline points="9 18 15 12 9 6"></polyline>
+</svg>
+</button>
+</div>
+<!-- Subtle Separator -->
+<div class="w-full h-[1px] bg-gradient-to-r from-transparent via-[#2e4333] to-transparent my-1"></div>
+<!-- Unified Continuous Capsule Dock (一体化连续微型底槽) -->
+<div class="flex flex-col items-stretch gap-1.5 p-1.5 rounded-2xl bg-[#0e1711]/90 border border-[#233527]/80 shadow-inner w-full" data-purpose="dock-capsule-tray"><!-- 1. Active: 精准狙击准星抽卡 -->
+<button class="relative group w-full h-10 rounded-xl bg-lime-400/15 text-lime-400 border border-lime-400/30 shadow-[0_0_12px_rgba(163,230,53,0.15)] flex items-center transition-all overflow-hidden" type="button">
+<span class="w-10 h-10 flex items-center justify-center shrink-0"><svg class="w-5 h-5 stroke-current stroke-[1.8] fill-none" viewBox="0 0 24 24"><rect height="18" rx="2.5" width="14" x="5" y="3"></rect><path d="M12 9l1.6 2.2a1.2 1.2 0 0 1-.9 1.8h-1.4a1.2 1.2 0 0 1-.9-1.8L12 9z" fill="currentColor"></path><path d="M12 13v2"></path><path d="M8 7h.01M16 17h.01"></path></svg></span>
+<span class="nav-label-fade text-xs font-bold text-lime-400 ml-1 whitespace-nowrap">精准抽卡</span>
+<span class="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-4 rounded-r-full bg-lime-400 shadow-[0_0_8px_rgba(163,230,53,0.8)]"></span>
+<span class="nav-tooltip opacity-0 group-hover:opacity-100 transition-all pointer-events-none absolute left-full ml-3 px-2.5 py-1 rounded bg-[#18231a] text-xs text-lime-300/90 whitespace-nowrap border border-lime-500/20 shadow-lg shadow-black/60 z-50">精准抽卡</span>
+</button>
+<!-- 2. 放送周历 / 新番时间表 -->
+<button class="relative group w-full h-10 rounded-xl text-gray-400 hover:text-gray-100 hover:bg-[#1a281e]/80 flex items-center transition-all overflow-hidden" type="button">
+<span class="w-10 h-10 flex items-center justify-center shrink-0">
+<svg class="w-5 h-5 stroke-current stroke-2 fill-none transition-transform group-hover:scale-110" viewBox="0 0 24 24">
+<rect height="18" rx="2" width="18" x="3" y="4"></rect>
+<line x1="16" x2="16" y1="2" y2="6"></line>
+<line x1="8" x2="8" y1="2" y2="6"></line>
+<line x1="3" x2="21" y1="10" y2="10"></line>
+<path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"></path>
+</svg>
+</span>
+<span class="nav-label-fade text-xs font-medium text-gray-300 ml-1 whitespace-nowrap">新番周历</span>
+<span class="nav-tooltip opacity-0 group-hover:opacity-100 transition-all pointer-events-none absolute left-full ml-3 px-2.5 py-1 rounded bg-[#18231a] text-xs text-lime-300/90 whitespace-nowrap border border-lime-500/20 shadow-lg shadow-black/60 z-50">新番周历</span>
+</button>
+<!-- 3. 书签收藏 / 追更日志 -->
+<button class="relative group w-full h-10 rounded-xl text-gray-400 hover:text-gray-100 hover:bg-[#1a281e]/80 flex items-center transition-all overflow-hidden" type="button">
+<span class="w-10 h-10 flex items-center justify-center shrink-0">
+<svg class="w-5 h-5 stroke-current stroke-2 fill-none transition-transform group-hover:scale-110" viewBox="0 0 24 24">
+<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+</svg>
+</span>
+<span class="nav-label-fade text-xs font-medium text-gray-300 ml-1 whitespace-nowrap">我的收藏</span>
+<span class="nav-tooltip opacity-0 group-hover:opacity-100 transition-all pointer-events-none absolute left-full ml-3 px-2.5 py-1 rounded bg-[#18231a] text-xs text-lime-300/90 whitespace-nowrap border border-lime-500/20 shadow-lg shadow-black/60 z-50">我的收藏</span>
+</button>
+<!-- 4. 全局探索 / 国漫合集（放大镜图标） -->
+<button aria-label="国漫合集" class="relative group w-full h-10 rounded-xl text-gray-400 hover:text-gray-100 hover:bg-[#1a281e]/80 flex items-center transition-all overflow-hidden" title="国漫合集" type="button">
+<span class="w-10 h-10 flex items-center justify-center shrink-0">
+<svg class="w-5 h-5 stroke-current stroke-2 fill-none transition-transform group-hover:scale-110" viewBox="0 0 24 24">
+<circle cx="11" cy="11" r="7"></circle>
+<line x1="21" x2="16.65" y1="21" y2="16.65"></line>
+</svg>
+</span>
+<span class="nav-label-fade text-xs font-medium text-gray-300 ml-1 whitespace-nowrap">国漫合集</span>
+<span class="nav-tooltip opacity-0 group-hover:opacity-100 transition-all pointer-events-none absolute left-full ml-3 px-2.5 py-1 rounded bg-[#18231a] text-xs text-lime-300/90 whitespace-nowrap border border-lime-500/20 shadow-lg shadow-black/60 z-50">国漫合集</span>
+</button>
+<!-- Micro divider inside capsule -->
+<div class="w-full h-[1px] bg-white/10 my-0.5"></div>
+<!-- 5. 快速添加 / 新增录入 -->
+<button class="relative group w-full h-10 rounded-xl text-gray-400 hover:text-lime-400 hover:bg-lime-400/10 flex items-center transition-all overflow-hidden" type="button">
+<span class="w-10 h-10 flex items-center justify-center shrink-0">
+<svg class="w-5 h-5 stroke-current stroke-2 fill-none transition-transform group-hover:rotate-90 duration-300" viewBox="0 0 24 24">
+<line x1="12" x2="12" y1="5" y2="19"></line>
+<line x1="5" x2="19" y1="12" y2="12"></line>
+</svg>
+</span>
+<span class="nav-label-fade text-xs font-medium text-lime-400/90 ml-1 whitespace-nowrap">添加追番</span>
+<span class="nav-tooltip opacity-0 group-hover:opacity-100 transition-all pointer-events-none absolute left-full ml-3 px-2.5 py-1 rounded bg-[#18231a] text-xs text-lime-300/90 whitespace-nowrap border border-lime-500/20 shadow-lg shadow-black/60 z-50">添加追番</span>
+</button></div>
+</div>
+<!-- Bottom: Profile / Settings Cluster -->
+<div class="flex flex-col items-stretch gap-2 p-1.5 rounded-2xl bg-[#0e1711]/70 border border-[#233527]/50 w-full"><button class="relative group w-full h-10 px-2.5 rounded-xl text-gray-400 hover:text-gray-200 hover:bg-[#1a281e]/80 flex items-center transition-all" type="button">
+<span class="w-5 h-5 flex items-center justify-center shrink-0">
+<svg class="w-5 h-5 stroke-current stroke-2 fill-none transition-transform group-hover:rotate-45 duration-300" viewBox="0 0 24 24">
+<circle cx="12" cy="12" r="3"></circle>
+<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+</svg>
+</span>
+<span class="nav-label-fade text-xs font-medium text-gray-300 ml-3 whitespace-nowrap">偏好设置</span>
+<span class="nav-tooltip opacity-0 group-hover:opacity-100 transition-all pointer-events-none absolute left-full ml-3 px-2.5 py-1 rounded bg-[#18231a] text-xs text-lime-300/90 whitespace-nowrap border border-lime-500/20 shadow-lg shadow-black/60 z-50">偏好设置</span>
+</button>
+<div class="relative group cursor-pointer flex items-center px-1 py-1 rounded-xl hover:bg-[#1a281e]/80 transition-all">
+<div class="relative shrink-0">
+<div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#1b2b20] to-[#25392b] border border-lime-400/40 flex items-center justify-center font-mono font-bold text-xs text-lime-400 shadow-sm">
+      OG
+    </div>
+<span class="w-2 h-2 rounded-full bg-lime-400 border border-[#0e1711] absolute -bottom-0.5 -right-0.5"></span>
+</div>
+<div class="nav-label-fade flex flex-col justify-center ml-2.5 whitespace-nowrap overflow-hidden">
+<span class="text-xs font-bold text-gray-200">极客玩家</span>
+<span class="text-[10px] text-lime-400 font-mono">在线 VIP 4</span>
+</div>
+<span class="nav-tooltip opacity-0 group-hover:opacity-100 transition-all pointer-events-none absolute left-full ml-3 px-2.5 py-1 rounded bg-[#18231a] text-xs text-lime-300/90 whitespace-nowrap border border-lime-500/20 shadow-lg shadow-black/60 z-50">用户状态</span>
+</div></div>
+</aside>
+<!-- END: Integrated Mini Navigation Capsule Rail --><main class="w-full max-w-[1360px] bg-[#141e17] rounded-3xl border border-[#233527] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.8)] overflow-hidden relative min-h-[720px] flex flex-col justify-between flex-1" data-purpose="anime-deck-dashboard">
+<!-- Ambient background glow fields -->
+<div class="absolute -top-36 left-1/2 -translate-x-1/2 w-[700px] h-[340px] bg-[#a3e635]/8 rounded-full blur-[110px] pointer-events-none"></div>
+<div class="absolute -bottom-36 left-1/4 w-[600px] h-[360px] bg-[#22c55e]/6 rounded-full blur-[100px] pointer-events-none"></div>
+<!-- Header Navigation / Information Bar -->
+<header class="relative z-10 px-6 sm:px-10 pt-8 pb-4 flex flex-wrap items-center justify-between gap-4 border-b border-[#233527]/60">
+<div class="flex items-center gap-3">
+<span class="px-2.5 py-1 rounded-md text-[11px] font-extrabold tracking-wider bg-lime-400/10 text-lime-400 border border-lime-400/30 uppercase flex items-center gap-1.5 shadow-sm">
+<span class="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse"></span>
+        CARD DECK
+      </span>
+<div>
+<h1 class="text-lg sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
+          追番扑克牌夹
+          <span class="text-xs font-mono font-normal text-gray-400 bg-[#1c2a1f] px-2 py-0.5 rounded-full border border-[#2e4333]">(共 5 部臻选)</span>
+</h1>
+<p class="text-xs text-lime-400/80 font-medium mt-0.5">OBSIDIAN GROVE · 交互抽卡看番系统</p>
+</div>
+</div>
+<!-- Center / Right Top Guidance Tooltip -->
+<div class="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#0e1711] border border-lime-500/25 shadow-inner">
+<span class="flex h-2 w-2 relative">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-lime-400 opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-lime-400"></span>
+</span>
+<span class="text-xs text-gray-300 font-medium" id="deck-instruction-hint">
+        点击卡牌切为待抽 · <span class="text-lime-400 font-semibold underline decoration-lime-400/40 underline-offset-2">再次点击翻转抽取详情</span>
+</span>
+</div>
+</header>
+<!-- BEGIN: Core Visual Stage (扑克牌核心展示舞台) -->
+<section class="relative z-10 w-full flex-1 flex flex-col items-center justify-center py-10 sm:py-14 px-4 overflow-visible deck-perspective" data-purpose="poker-deck-stage">
+<!-- Dynamic State Hint Badge Over Deck -->
+<div class="mb-6 flex items-center gap-3 transition-all duration-300 transform" id="deck-active-prompter">
+<div class="flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-lime-400/15 via-[#1b2b20] to-lime-400/10 border border-lime-400/40 shadow-[0_0_15px_rgba(163,230,53,0.15)]">
+<svg class="w-4 h-4 text-lime-400 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+<path d="M5 10l7-7m0 0l7 7m-7-7v18" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2"></path>
+</svg>
+<span class="text-xs font-semibold text-gray-200">当前抽取目标:</span>
+<span class="text-xs font-bold text-lime-400 font-mono tracking-wide" id="ready-card-title-badge">《李熊猫》</span>
+<span class="text-[11px] text-gray-400 bg-black/40 px-2 py-0.5 rounded ml-1">已高出 1/3 · 双击展开</span>
+</div>
+</div>
+<!-- The 5 Stacked Poker Hand Cards (Center Stage: 自然堆叠 0 -> 1 -> 2 -> 3 -> 4 从底到顶) -->
+<div class="relative w-[300px] h-[430px] sm:w-[320px] sm:h-[460px] flex items-center justify-center my-6" id="card-deck-stack">
+<!-- Card 0: 李熊猫 (默认已向上突出 1/3，处于待抽取状态；base_z=10, is-ready z=15，低于凡人修仙传的20) -->
+<div class="poker-card card-slot-0 is-ready absolute inset-0 rounded-2xl overflow-hidden cursor-pointer bg-gradient-to-b from-[#1f3325] via-[#142118] to-[#0c140e] border-2 border-lime-400/70 shadow-2xl" data-airing="连载追更中" data-category="热血 · 玄幻" data-currep="1" data-index="0" data-marktext="看完第 1 集" data-meta="等待核验 信息较旧 · 最近核验 2026/10/5" data-poster="https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw" data-progress="8" data-remaining="还有 12 集未看" data-score="9.8" data-scorelabel="★ 9.8 高分神作" data-status="还没开始 · 已核验至第 12 集" data-subtitle="PANDA MASTER CHRONICLES · 独播首发" data-tag="有未看内容" data-title="李熊猫" data-totalep="12" style="z-index: 15;">
+<div class="w-full h-full relative flex flex-col justify-between p-5">
+<!-- Background Poster Thumbnail Overlay -->
+<div class="absolute inset-0 bg-cover bg-top opacity-35 mix-blend-luminosity hover:opacity-50 transition-opacity" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw');"></div>
+<div class="absolute inset-0 bg-gradient-to-t from-[#09110b] via-[#09110b]/60 to-transparent"></div>
+<!-- Top Slot Indicator & Ready Tag -->
+<div class="relative z-10 flex items-center justify-between">
+<span class="ready-tag-badge px-2.5 py-1 rounded bg-lime-400 text-black text-[11px] font-extrabold tracking-wider uppercase shadow-md flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-black animate-ping"></span>
+              待抽取
+            </span>
+<span class="text-xs font-mono font-bold text-lime-400 bg-black/60 px-2 py-0.5 rounded border border-white/10">#01</span>
+</div>
+<!-- Bottom Card Typography -->
+<div class="relative z-10">
+<span class="inline-block text-[11px] font-bold text-lime-400 bg-lime-400/10 px-2 py-0.5 rounded border border-lime-400/20 mb-1.5">有未看内容</span>
+<h3 class="text-2xl font-black text-white tracking-tight drop-shadow-md">李熊猫</h3>
+<p class="text-xs text-gray-300 mt-1 flex items-center justify-between">
+<span class="">第 1/12 集 · 待开始</span>
+<span class="text-[11px] font-mono text-lime-400">9.8 分</span>
+</p>
+<div class="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] text-lime-400 font-medium">
+<span class="flex items-center gap-1">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+                再次点击抽出
+              </span>
+<span class="text-gray-400">热血 · 玄幻</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 1: 凡人修仙传 (base_z=20, 待抽取时 z=25: 压住李熊猫的10/15，但绝不压住时光代理人的30) -->
+<div class="poker-card card-slot-1 absolute inset-0 rounded-2xl overflow-hidden cursor-pointer bg-gradient-to-b from-[#1a2d39] via-[#101b22] to-[#080e12] border border-cyan-500/30 shadow-2xl" data-airing="连载中 · 年番" data-category="修真 · 3D国漫" data-currep="116" data-index="1" data-marktext="看完第 116 集" data-meta="官方源同步 · 最近核验 今日 12:00" data-poster="https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw" data-progress="98" data-remaining="还有 2 集未看" data-score="9.6" data-scorelabel="★ 9.6 经典长篇" data-status="更新中 · 已核验至第 118 集" data-subtitle="A RECORD OF MORTAL'S JOURNEY · 每周六更新" data-tag="每周六 11:00 更新" data-title="凡人修仙传" data-totalep="118" style="z-index: 20;">
+<div class="w-full h-full relative flex flex-col justify-between p-5">
+<div class="absolute inset-0 bg-cover bg-top opacity-30 mix-blend-luminosity hover:opacity-50 transition-opacity" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw');"></div>
+<div class="absolute inset-0 bg-gradient-to-t from-[#060b0e] via-[#060b0e]/60 to-transparent"></div>
+<div class="relative z-10 flex items-center justify-between">
+<span class="ready-tag-badge px-2.5 py-1 rounded bg-cyan-400 text-black text-[11px] font-extrabold tracking-wider uppercase shadow-md hidden">待抽取</span>
+<span class="idle-tag-badge text-[11px] font-bold px-2.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/30">9.6 分</span>
+<span class="text-xs font-mono font-bold text-cyan-400 bg-black/60 px-2 py-0.5 rounded border border-white/10">#02</span>
+</div>
+<div class="relative z-10">
+<span class="inline-block text-[11px] font-bold text-cyan-300 bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-400/20 mb-1.5">连载中</span>
+<h3 class="text-2xl font-black text-white tracking-tight drop-shadow-md">凡人修仙传</h3>
+<p class="text-xs text-gray-300 mt-1 flex items-center justify-between">
+<span class="">从 116 集继续 · 差 2 集</span>
+<span class="text-[11px] font-mono text-cyan-300">118 集</span>
+</p>
+<div class="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] text-cyan-300 font-medium">
+<span class="flex items-center gap-1">点击抽出卡牌</span>
+<span class="text-gray-400">修真 · 3D国漫</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 2: 时光代理人 (base_z=30, 待抽取时 z=35: 压住凡人与李熊猫，但绝不压住诡秘之主的40) -->
+<div class="poker-card card-slot-2 absolute inset-0 rounded-2xl overflow-hidden cursor-pointer bg-gradient-to-b from-[#311f3d] via-[#1b0f22] to-[#0d0711] border border-purple-500/30 shadow-2xl" data-airing="全季完结" data-category="悬疑 · 治愈" data-currep="24" data-index="2" data-marktext="重温第 24 集" data-meta="官方社区热议中 · 最近核验 昨天" data-poster="https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw" data-progress="100" data-remaining="全季已刷完 · 待更新" data-score="9.5" data-scorelabel="★ 9.5 烧脑口碑" data-status="完结已刷 · 等待英都篇" data-subtitle="LINK CLICK · 特别篇筹备中" data-tag="特别篇蓄势待发" data-title="时光代理人" data-totalep="24" style="z-index: 30;">
+<div class="w-full h-full relative flex flex-col justify-between p-5">
+<div class="absolute inset-0 bg-cover bg-top opacity-30 mix-blend-luminosity hover:opacity-50 transition-opacity" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw');"></div>
+<div class="absolute inset-0 bg-gradient-to-t from-[#0a050d] via-[#0a050d]/60 to-transparent"></div>
+<div class="relative z-10 flex items-center justify-between">
+<span class="ready-tag-badge px-2.5 py-1 rounded bg-purple-400 text-black text-[11px] font-extrabold tracking-wider uppercase shadow-md hidden">待抽取</span>
+<span class="idle-tag-badge text-[11px] font-bold px-2.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/30">9.5 分</span>
+<span class="text-xs font-mono font-bold text-purple-400 bg-black/60 px-2 py-0.5 rounded border border-white/10">#03</span>
+</div>
+<div class="relative z-10">
+<span class="inline-block text-[11px] font-bold text-purple-300 bg-purple-400/10 px-2 py-0.5 rounded border border-purple-400/20 mb-1.5">全剧终</span>
+<h3 class="text-2xl font-black text-white tracking-tight drop-shadow-md">时光代理人</h3>
+<p class="text-xs text-gray-300 mt-1 flex items-center justify-between">
+<span class="">二刷完毕 · 期待剧场版</span>
+<span class="text-[11px] font-mono text-purple-300">24 集</span>
+</p>
+<div class="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] text-purple-300 font-medium">
+<span class="flex items-center gap-1">点击抽出卡牌</span>
+<span class="text-gray-400">悬疑 · 治愈</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 3: 诡秘之主 (base_z=40, 待抽取时 z=45: 压住前方所有卡，但绝不压住镇魂街的50) -->
+<div class="poker-card card-slot-3 absolute inset-0 rounded-2xl overflow-hidden cursor-pointer bg-gradient-to-b from-[#3b2b1b] via-[#21170d] to-[#110b06] border border-amber-500/30 shadow-2xl" data-airing="敬请期待" data-category="克苏鲁 · 奇幻" data-currep="0" data-index="3" data-marktext="预约提醒" data-meta="预约站核验 · 最近核验 2026/08/18" data-poster="https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw" data-progress="0" data-remaining="敬请期待 PV 播映" data-score="9.9" data-scorelabel="★ 9.9 史诗级期待" data-status="定档预告 · 预约已超 300 万" data-subtitle="LORD OF THE MYSTERIES · 愚者降临" data-tag="2025 年度期待" data-title="诡秘之主" data-totalep="1" style="z-index: 40;">
+<div class="w-full h-full relative flex flex-col justify-between p-5">
+<div class="absolute inset-0 bg-cover bg-top opacity-30 mix-blend-luminosity hover:opacity-50 transition-opacity" data-progress="0" data-remaining="敬请期待 PV 播映" data-score="9.9" data-scorelabel="★ 9.9 史诗级期待" data-status="定档预告 · 预约已超 300 万" data-subtitle="LORD OF THE MYSTERIES · 愚者降临" data-tag="2025 年度期待" data-title="诡秘之主" data-totalep="1" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw">
+<div class="w-full h-full relative flex flex-col justify-between p-5">
+<div class="absolute inset-0 bg-cover bg-top opacity-30 mix-blend-luminosity hover:opacity-50 transition-opacity" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw');"></div>
+<div class="absolute inset-0 bg-gradient-to-t from-[#0e0804] via-[#0e0804]/60 to-transparent"></div>
+<div class="relative z-10 flex items-center justify-between">
+<span class="ready-tag-badge px-2.5 py-1 rounded bg-amber-400 text-black text-[11px] font-extrabold tracking-wider uppercase shadow-md hidden">待抽取</span>
+<span class="idle-tag-badge text-[11px] font-bold px-2.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30">9.9 期待</span>
+<span class="text-xs font-mono font-bold text-amber-400 bg-black/60 px-2 py-0.5 rounded border border-white/10">#04</span>
+</div>
+<div class="relative z-10">
+<span class="inline-block text-[11px] font-bold text-amber-300 bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20 mb-1.5">敬请期待</span>
+<h3 class="text-2xl font-black text-white tracking-tight drop-shadow-md">诡秘之主</h3>
+<p class="text-xs text-gray-300 mt-1 flex items-center justify-between">
+<span class="">塔罗会聚首 · 预约先导</span>
+<span class="text-[11px] font-mono text-amber-300">预约中</span>
+</p>
+<div class="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] text-amber-300 font-medium">
+<span class="flex items-center gap-1">点击抽出卡牌</span>
+<span class="text-gray-400">克苏鲁 · 奇幻</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Card 4: 镇魂街 (base_z=50, 待抽取时 z=55: 最右侧自然顶层) -->
+<div class="poker-card card-slot-4 absolute inset-0 rounded-2xl overflow-hidden cursor-pointer bg-gradient-to-b from-[#3d1d1d] via-[#210d0d] to-[#120707] border border-rose-500/30 shadow-2xl" data-airing="重温追番" data-category="守护灵 · 激战" data-currep="5" data-index="4" data-marktext="看完第 5 集" data-meta="本站追番列表 · 最近核验 2026/09/12" data-poster="https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw" data-progress="21" data-remaining="还有 19 集未重温" data-score="9.1" data-scorelabel="★ 9.1 国漫燃作" data-status="重温中 · 已核验第 3 季" data-subtitle="RAKSHASA STREET · 许褚典韦共护主" data-tag="经典热血番" data-title="镇魂街" data-totalep="24" style="z-index: 50;">
+<div class="w-full h-full relative flex flex-col justify-between p-5">
+<div class="absolute inset-0 bg-cover bg-top opacity-30 mix-blend-luminosity hover:opacity-50 transition-opacity" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAPqrasEbalNK-T7GOICJet7iCRBq8z8kUQBuYYtsibaVxR6cPk27TeiEtuZj960QW4SprcbLlDhYTOd1Bxbpl-kAppe9SnoN-UEezQCyWLuEvp6g3H2z3FfNx_Gx6YUqVn2PZLGakQ14YZ-7byz6lsbP3XEB0DCtbQT_1hXfNS1ohbBJcSBtWFUm3AHPzpFKqDTIj1G7bhTQvw3TjOoqqEuTMXqPtRupYRhtGKyS3zsADX0j8diXNf-oRJesbJqdpFPw');"></div>
+<div class="absolute inset-0 bg-gradient-to-t from-[#0e0404] via-[#0e0404]/60 to-transparent"></div>
+<div class="relative z-10 flex items-center justify-between">
+<span class="ready-tag-badge px-2.5 py-1 rounded bg-rose-400 text-black text-[11px] font-extrabold tracking-wider uppercase shadow-md hidden">待抽取</span>
+<span class="idle-tag-badge text-[11px] font-bold px-2.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-400/30">9.1 分</span>
+<span class="text-xs font-mono font-bold text-rose-400 bg-black/60 px-2 py-0.5 rounded border border-white/10">#05</span>
+</div>
+<div class="relative z-10">
+<span class="inline-block text-[11px] font-bold text-rose-300 bg-rose-400/10 px-2 py-0.5 rounded border border-rose-400/20 mb-1.5">重温中</span>
+<h3 class="text-2xl font-black text-white tracking-tight drop-shadow-md">镇魂街</h3>
+<p class="text-xs text-gray-300 mt-1 flex items-center justify-between">
+<span class="">第 5/24 集 · 芦花古楼</span>
+<span class="text-[11px] font-mono text-rose-300">24 集</span>
+</p>
+<div class="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] text-rose-300 font-medium">
+<span class="flex items-center gap-1">点击抽出卡牌</span>
+<span class="text-gray-400">守护灵 · 激战</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div></section>
+<!-- END: Core Visual Stage -->
+<!-- Footer Quick Actions & Hotkeys -->
+<footer class="relative z-10 px-6 sm:px-10 py-5 bg-[#0e1711]/90 border-t border-[#233527]/70 flex flex-wrap items-center justify-between gap-4 text-xs text-gray-400">
+<div class="flex items-center gap-3">
+<span class="inline-flex items-center gap-1.5 text-lime-400 font-medium">
+<kbd class="px-2 py-0.5 rounded bg-[#1c2a1f] border border-[#2e4333] text-gray-300 font-mono text-[10px]">←</kbd>
+<kbd class="px-2 py-0.5 rounded bg-[#1c2a1f] border border-[#2e4333] text-gray-300 font-mono text-[10px]">→</kbd>
+        左右键切换牌位
+      </span>
+<span class="text-gray-600">|</span>
+<span class="inline-flex items-center gap-1 text-gray-300">
+<kbd class="px-2 py-0.5 rounded bg-[#1c2a1f] border border-[#2e4333] text-gray-300 font-mono text-[10px]">Space</kbd>
+        /
+        <kbd class="px-2 py-0.5 rounded bg-[#1c2a1f] border border-[#2e4333] text-gray-300 font-mono text-[10px]">Enter</kbd>
+        抽取当前高出卡牌
+      </span>
+</div>
+<!-- Right Cycle Arrow Controls -->
+<div class="flex items-center gap-2">
+<button class="p-2 rounded-xl bg-[#1a281e] hover:bg-[#25392b] hover:text-lime-400 text-gray-300 border border-[#293d2e] transition-all" id="btn-prev-card" title="上一张卡牌" type="button">
+<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path></svg>
+</button>
+<button class="px-3.5 py-2 rounded-xl bg-lime-400/10 hover:bg-lime-400/20 text-lime-400 border border-lime-400/30 text-xs font-bold transition-all flex items-center gap-1.5" id="btn-trigger-draw" type="button">
+<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
+        抽取此牌详情
+      </button>
+<button class="p-2 rounded-xl bg-[#1a281e] hover:bg-[#25392b] hover:text-lime-400 text-gray-300 border border-[#293d2e] transition-all" id="btn-next-card" title="下一张卡牌" type="button">
+<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path></svg>
+</button>
+</div>
+</footer>
+</main>
+<!-- END: Main Showcase Container -->
+<!-- BEGIN: Modal Dialog for High-End Anime Detail (两步抽取详情弹窗) -->
+<div aria-modal="true" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 opacity-0 pointer-events-none modal-backdrop-transition" id="anime-detail-modal" role="dialog">
+<!-- Diffused Backdrop Blur Mask -->
+<div class="absolute inset-0 bg-[#070e09]/85 backdrop-blur-xl" id="modal-backdrop-mask"></div>
+<!-- Ambient Light Halo inside Dialog -->
+<div class="absolute w-[500px] h-[500px] bg-lime-400/15 rounded-full blur-[120px] pointer-events-none"></div>
+<!-- Modal Window Content Container -->
+<div class="relative z-10 w-full max-w-4xl bg-[#131e16] border border-lime-400/40 rounded-3xl shadow-[0_25px_70px_rgba(0,0,0,0.9),0_0_50px_rgba(163,230,53,0.25)] overflow-hidden transform scale-95 opacity-0 modal-card-transition" id="modal-content-box">
+<!-- Top Close Button -->
+<button class="absolute top-4 right-4 z-20 w-10 h-10 rounded-full bg-black/60 hover:bg-lime-400 text-gray-300 hover:text-black border border-white/10 hover:border-lime-400 flex items-center justify-center transition-all duration-200 active:scale-95 group shadow-lg" id="modal-close-btn" title="关闭弹窗 (Esc)" type="button">
+<svg class="w-5 h-5 stroke-current stroke-2 fill-none" viewBox="0 0 24 24">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+<!-- Modal Grid Layout (Poster Left, Rich Data Right) -->
+<div class="grid grid-cols-1 md:grid-cols-12 gap-6 lg:gap-8 p-6 sm:p-8 md:p-10 items-center">
+<!-- Left Column: Poster with Ambient Backlight -->
+<div class="md:col-span-5 flex justify-center">
+<div class="relative shrink-0 group w-52 sm:w-60 md:w-full max-w-[270px]">
+<!-- Glow halo around poster -->
+<div class="absolute -inset-3 bg-gradient-to-tr from-lime-400/40 via-emerald-500/25 to-lime-300/10 rounded-3xl blur-xl opacity-80 group-hover:opacity-100 transition-opacity"></div>
+<div class="relative aspect-[3/4] rounded-2xl overflow-hidden shadow-2xl border border-lime-400/40 bg-[#0d1610] ring-1 ring-white/10">
+<img alt="海报" class="w-full h-full object-cover object-left-top transition-transform duration-700 group-hover:scale-105" id="modal-poster-img" src="">
+<div class="absolute inset-0 bg-gradient-to-t from-[#0c150f] via-black/20 to-transparent"></div>
+<!-- Poster Top Badges -->
+<div class="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+<span class="px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-md text-[10px] font-bold tracking-wider text-lime-400 border border-lime-500/30 uppercase flex items-center gap-1 shadow-md">
+<span class="w-1.5 h-1.5 rounded-full bg-lime-400 animate-ping inline-block"></span>
+                4K · 杜比全景声
+              </span>
+<span class="px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-md text-[10px] font-bold text-gray-200 border border-white/10">
+                年度霸权
+              </span>
+</div>
+<!-- Poster Bottom Tags -->
+<div class="absolute bottom-3 left-3 right-3 flex items-center justify-between">
+<div class="bg-black/85 backdrop-blur-md px-2.5 py-1 rounded-lg text-xs font-semibold text-lime-400 border border-lime-500/30 shadow-lg flex items-center gap-1.5" id="modal-category-tag">
+<span class="w-1.5 h-1.5 rounded-full bg-lime-400"></span>
+                热血 · 玄幻
+              </div>
+<span class="text-[11px] font-mono text-gray-300 bg-black/80 backdrop-blur-md px-2 py-0.5 rounded-md border border-white/10" id="modal-rank-tag">TOP 01</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Column: Anime Meta, Metrics & Action Details -->
+<div class="md:col-span-7 flex flex-col justify-center min-w-0">
+<!-- Status & Category Badges -->
+<div class="flex items-center flex-wrap gap-2 mb-2.5">
+<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-lime-400/15 border border-lime-400/40 text-xs font-semibold tracking-wide text-lime-400 shadow-sm" id="modal-tag">
+<span class="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse"></span>
+            有未看内容
+          </span>
+<span class="px-2.5 py-0.5 rounded-full bg-[#1b2b20] border border-[#2f4233] text-xs text-gray-300 font-medium" id="modal-airing">
+            连载追更中
+          </span>
+<span class="px-2.5 py-0.5 rounded-full bg-[#1b2b20] border border-[#2f4233] text-xs text-lime-400/90 font-mono font-bold" id="modal-scorelabel">
+            ★ 9.8 高分神作
+          </span>
+</div>
+<!-- Title & Sub-heading -->
+<div class="mb-3.5">
+<h2 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight truncate drop-shadow-md" id="modal-title">
+            李熊猫
+          </h2>
+<p class="text-xs sm:text-sm text-lime-400/90 font-medium mt-1 tracking-wide" id="modal-subtitle">
+            PANDA MASTER CHRONICLES · 独播首发
+          </p>
+</div>
+<!-- Airing & Sync Status -->
+<p class="text-xs sm:text-sm text-gray-400 mb-4 font-normal flex items-center gap-2" id="modal-status">
+          还没开始 · 已核验至第 12 集
+        </p>
+<!-- Segmented Sci-Fi Progress Tracker -->
+<div class="p-4 rounded-2xl bg-[#101a13] border border-[#223526] mb-5 shadow-inner">
+<div class="flex items-baseline justify-between mb-2">
+<div class="flex items-baseline gap-1.5">
+<span class="text-gray-400 text-xs font-medium">观看进度</span>
+<span class="text-gray-300 text-xs font-semibold ml-1">第</span>
+<span class="text-2xl sm:text-3xl font-extrabold text-lime-400 font-mono tracking-tight" id="modal-currep">1</span>
+<span class="text-gray-300 text-xs font-semibold" id="modal-totalep-text">/ 12 集</span>
+</div>
+<span class="text-xs text-lime-400 font-medium" id="modal-remaining">还有 12 集未看</span>
+</div>
+<!-- Dynamic Progress Bar -->
+<div class="w-full h-2.5 rounded-full bg-[#1a291f] overflow-hidden p-0.5 flex gap-1">
+<div class="h-full bg-lime-400 rounded-full shadow-[0_0_10px_rgba(163,230,53,0.8)] transition-all duration-500" id="modal-progressbar" style="width: 8%;"></div>
+<div class="h-full flex-1 bg-lime-400/10 rounded-full"></div>
+</div>
+<!-- Quick Episode Jump Chips -->
+<div class="flex items-center flex-wrap gap-1.5 mt-3 pt-2.5 border-t border-[#233527]/70 text-[11px] text-gray-400">
+<span class="text-gray-400 text-[10px] uppercase font-bold tracking-wider mr-1">选集:</span>
+<button class="px-2.5 py-0.5 rounded bg-lime-400/25 text-lime-400 font-mono font-bold border border-lime-400/40" type="button">01</button>
+<button class="px-2.5 py-0.5 rounded bg-[#1c2920] hover:bg-[#25382a] text-gray-300 font-mono transition-colors" type="button">02</button>
+<button class="px-2.5 py-0.5 rounded bg-[#1c2920] hover:bg-[#25382a] text-gray-300 font-mono transition-colors" type="button">03</button>
+<button class="px-2.5 py-0.5 rounded bg-[#1c2920] hover:bg-[#25382a] text-gray-300 font-mono transition-colors" type="button">04</button>
+<span class="text-gray-500 font-mono text-[10px]">...</span>
+<button class="px-2.5 py-0.5 rounded bg-[#1c2920] hover:bg-[#25382a] text-gray-300 font-mono transition-colors" id="modal-last-ep-btn" type="button">12</button>
+</div>
+</div>
+<!-- High-Glow CTA Buttons -->
+<div class="flex flex-wrap items-center gap-3 mb-5">
+<!-- Primary Glowing Cyber Watch Button -->
+<a class="relative group inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-lime-400 hover:bg-lime-300 text-black font-extrabold text-sm transition-all transform hover:-translate-y-0.5 active:scale-95 shadow-[0_0_20px_rgba(163,230,53,0.35)] hover:shadow-[0_0_30px_rgba(163,230,53,0.55)] cursor-pointer" href="#watch">
+<svg class="w-4 h-4 fill-current" viewBox="0 0 24 24">
+<path d="M8 5v14l11-7z"></path>
+</svg>
+<span class="tracking-wide">前往官方观看</span>
+<svg class="w-3.5 h-3.5 stroke-current stroke-2 fill-none transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" viewBox="0 0 24 24">
+<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+<polyline points="15 3 21 3 21 9"></polyline>
+<line x1="10" x2="21" y1="14" y2="3"></line>
+</svg>
+</a>
+<!-- Mark Viewed Secondary CTA -->
+<button class="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-[#1c2b20] hover:bg-[#273d2d] text-gray-100 border border-[#344d3a] hover:border-lime-400/40 text-sm font-medium transition-all shadow-md active:scale-95" type="button">
+<svg class="w-4 h-4 stroke-lime-400 stroke-2 fill-none" viewBox="0 0 24 24">
+<polyline points="20 6 9 17 4 12"></polyline>
+</svg>
+<span class="" id="modal-marktext">看完第 1 集</span>
+</button>
+<!-- Modify Progress Quick Pill Link -->
+<button class="inline-flex items-center gap-1.5 px-3 py-3 rounded-xl hover:bg-[#1a281e] text-gray-400 hover:text-gray-200 border border-transparent hover:border-[#2a3c2e] text-sm font-medium transition-all" type="button">
+<svg class="w-3.5 h-3.5 stroke-current stroke-2 fill-none" viewBox="0 0 24 24">
+<path d="M12 20h9"></path>
+<path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+</svg>
+<span class="">修改进度</span>
+</button>
+</div>
+<!-- Modal Bottom Metadata & Auto Sync -->
+<div class="pt-3 border-t border-[#233527]/70 flex items-center justify-between text-xs text-gray-400 tracking-wide">
+<div class="flex items-center gap-2">
+<span class="relative flex h-2 w-2">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-lime-400 opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-lime-400"></span>
+</span>
+<span class="text-gray-300" id="modal-meta">等待核验 信息较旧 · 最近核验 2026/10/5</span>
+</div>
+<span class="text-[11px] font-mono text-lime-400/70">AUTO-SYNCED</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- END: Modal Dialog -->
+<!-- BEGIN: Interactive Logic for Two-Step Draw and Modal Launch -->
+<script data-purpose="poker-deck-interactions">
+  document.addEventListener('DOMContentLoaded', () => {
+    const cards = Array.from(document.querySelectorAll('.poker-card'));
+    const modal = document.getElementById('anime-detail-modal');
+    const modalContent = document.getElementById('modal-content-box');
+    const modalCloseBtn = document.getElementById('modal-close-btn');
+    const modalBackdrop = document.getElementById('modal-backdrop-mask');
+    const readyPromptBadge = document.getElementById('ready-card-title-badge');
+    const triggerDrawBtn = document.getElementById('btn-trigger-draw');
+    const prevBtn = document.getElementById('btn-prev-card');
+    const nextBtn = document.getElementById('btn-next-card');
+
+    // Sidebar Collapsible Controller
+    const sidebarRail = document.getElementById('sidebar-rail');
+    const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
+    const sidebarToggleIcon = document.getElementById('sidebar-toggle-icon');
+
+    if (sidebarToggleBtn && sidebarRail) {
+      sidebarToggleBtn.addEventListener('click', () => {
+        const isCollapsed = sidebarRail.classList.contains('is-collapsed');
+        if (isCollapsed) {
+          // 展开侧边栏 (宽 210px)
+          sidebarRail.classList.remove('is-collapsed', 'w-[72px]');
+          sidebarRail.classList.add('w-[210px]', 'px-3.5');
+          if (sidebarToggleIcon) {
+            sidebarToggleIcon.style.transform = 'rotate(180deg)';
+          }
+          sidebarToggleBtn.title = '收缩侧边栏';
+        } else {
+          // 收缩侧边栏 (宽 72px)
+          sidebarRail.classList.add('is-collapsed', 'w-[72px]');
+          sidebarRail.classList.remove('w-[210px]', 'px-3.5');
+          if (sidebarToggleIcon) {
+            sidebarToggleIcon.style.transform = 'rotate(0deg)';
+          }
+          sidebarToggleBtn.title = '展开侧边栏';
+        }
+      });
+    }
+
+    // Modal elements to fill
+    const mPoster = document.getElementById('modal-poster-img');
+    const mCategory = document.getElementById('modal-category-tag');
+    const mRank = document.getElementById('modal-rank-tag');
+    const mTag = document.getElementById('modal-tag');
+    const mAiring = document.getElementById('modal-airing');
+    const mScorelabel = document.getElementById('modal-scorelabel');
+    const mTitle = document.getElementById('modal-title');
+    const mSubtitle = document.getElementById('modal-subtitle');
+    const mStatus = document.getElementById('modal-status');
+    const mCurrep = document.getElementById('modal-currep');
+    const mTotalep = document.getElementById('modal-totalep-text');
+    const mRemaining = document.getElementById('modal-remaining');
+    const mProgressBar = document.getElementById('modal-progressbar');
+    const mLastEpBtn = document.getElementById('modal-last-ep-btn');
+    const mMarkText = document.getElementById('modal-marktext');
+    const mMeta = document.getElementById('modal-meta');
+
+    // Active ready card index (defaults to index 0: 李熊猫)
+    let readyIndex = 0;
+    let isDrawingOut = false;
+
+    // Synchronize visual state for all cards with physically correct z-index hierarchy
+    function updateCardDeckState(newReadyIndex) {
+      if (newReadyIndex < 0) newReadyIndex = cards.length - 1;
+      if (newReadyIndex >= cards.length) newReadyIndex = 0;
+      readyIndex = newReadyIndex;
+
+      cards.forEach((card, idx) => {
+        const isReady = (idx === readyIndex);
+        const readyBadge = card.querySelector('.ready-tag-badge');
+        const idleBadge = card.querySelector('.idle-tag-badge');
+
+        /*
+          严格空间层级逻辑：
+          物理堆叠自然层级 base_z = (idx + 1) * 10
+          #01李熊猫: 10, #02凡人修仙传: 20, #03时光代理人: 30, #04诡秘之主: 40, #05镇魂街: 50
+          抽起/高出 1/3 时：
+          z-index = base_z + 5 (例如凡人修仙传为 25)
+          25 > 10 (压住李熊猫), 但 25 < 30 (绝不压住时光代理人)
+        */
+        const baseZ = (idx + 1) * 10;
+
+        if (isReady) {
+          card.classList.add('is-ready');
+          card.style.zIndex = baseZ + 5;
+          if (readyBadge) readyBadge.classList.remove('hidden');
+          if (idleBadge) idleBadge.classList.add('hidden');
+        } else {
+          card.classList.remove('is-ready');
+          card.style.zIndex = baseZ;
+          if (readyBadge) readyBadge.classList.add('hidden');
+          if (idleBadge) idleBadge.classList.remove('hidden');
+        }
+      });
+
+      // Update Top Status bar
+      const activeCard = cards[readyIndex];
+      if (activeCard && readyPromptBadge) {
+        readyPromptBadge.textContent = `《${activeCard.dataset.title}》`;
+      }
+    }
+
+    // Populate Modal with Active Card dataset
+    function populateModalData(card) {
+      mPoster.src = card.dataset.poster;
+      mPoster.alt = `${card.dataset.title} 海报`;
+      mCategory.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-lime-400"></span>${card.dataset.category}`;
+      mRank.textContent = `TOP 0${parseInt(card.dataset.index, 10) + 1}`;
+      mTag.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse"></span>${card.dataset.tag}`;
+      mAiring.textContent = card.dataset.airing;
+      mScorelabel.textContent = card.dataset.scorelabel;
+      mTitle.textContent = card.dataset.title;
+      mSubtitle.textContent = card.dataset.subtitle;
+      mStatus.textContent = card.dataset.status;
+      mCurrep.textContent = card.dataset.currep;
+      mTotalep.textContent = `/ ${card.dataset.totalep} 集`;
+      mRemaining.textContent = card.dataset.remaining;
+      mProgressBar.style.width = `${card.dataset.progress}%`;
+      mLastEpBtn.textContent = card.dataset.totalep;
+      mMarkText.textContent = card.dataset.marktext;
+      mMeta.textContent = card.dataset.meta;
+    }
+
+    // Launch the 3D Drawing Flip Animation & Show Modal
+    function drawActiveCard(card) {
+      if (isDrawingOut) return;
+      isDrawingOut = true;
+
+      // 1. Play Flip-draw 3D flight animation (此时全屏飞出展示，提升至顶层)
+      card.classList.add('is-drawing');
+
+      // 2. Open Modal after dramatic flip initiation
+      setTimeout(() => {
+        populateModalData(card);
+
+        // Open modal
+        modal.classList.remove('opacity-0', 'pointer-events-none');
+        modal.classList.add('opacity-100', 'pointer-events-auto');
+
+        modalContent.classList.remove('scale-95', 'opacity-0');
+        modalContent.classList.add('scale-100', 'opacity-100');
+
+        // Reset drawing card transform once covered
+        setTimeout(() => {
+          card.classList.remove('is-drawing');
+          // 恢复物理待抽取层级
+          const idx = parseInt(card.dataset.index, 10);
+          card.style.zIndex = (idx + 1) * 10 + 5;
+          isDrawingOut = false;
+        }, 400);
+      }, 350);
+    }
+
+    // Close Modal Handler
+    function closeModal() {
+      modalContent.classList.remove('scale-100', 'opacity-100');
+      modalContent.classList.add('scale-95', 'opacity-0');
+
+      modal.classList.remove('opacity-100', 'pointer-events-auto');
+      modal.classList.add('opacity-0', 'pointer-events-none');
+    }
+
+    // Handle Card Click (Two-step logic)
+    cards.forEach((card, idx) => {
+      card.addEventListener('click', () => {
+        if (isDrawingOut) return;
+
+        if (idx === readyIndex) {
+          // Second click on ready card: trigger flip and open modal!
+          drawActiveCard(card);
+        } else {
+          // First click on non-ready card: pull it up to 1/3 ready state
+          updateCardDeckState(idx);
+        }
+      });
+    });
+
+    // Button triggers
+    if (triggerDrawBtn) {
+      triggerDrawBtn.addEventListener('click', () => {
+        drawActiveCard(cards[readyIndex]);
+      });
+    }
+
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => {
+        updateCardDeckState(readyIndex - 1);
+      });
+    }
+
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => {
+        updateCardDeckState(readyIndex + 1);
+      });
+    }
+
+    // Modal close listeners
+    if (modalCloseBtn) modalCloseBtn.addEventListener('click', closeModal);
+    if (modalBackdrop) modalBackdrop.addEventListener('click', closeModal);
+
+    // Keyboard controls
+    window.addEventListener('keydown', (e) => {
+      const isModalOpen = !modal.classList.contains('pointer-events-none');
+      if (isModalOpen) {
+        if (e.key === 'Escape') closeModal();
+        return;
+      }
+
+      if (e.key === 'ArrowLeft') {
+        updateCardDeckState(readyIndex - 1);
+      } else if (e.key === 'ArrowRight') {
+        updateCardDeckState(readyIndex + 1);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        drawActiveCard(cards[readyIndex]);
+      }
+    });
+
+    // Initial state trigger
+    updateCardDeckState(0);
+  });
+</script>
+<!-- END: Interactive Logic -->
+
+
+
+
+</body></html>
