@@ -57,7 +57,6 @@ async function main() {
     await mkdir(join(repoCopy, 'cloudbase'), { recursive: true });
     await cp(join(repoRoot, 'cloudbase', 'shared'), join(repoCopy, 'cloudbase', 'shared'), { recursive: true });
     await symlink(join(siteRoot, 'node_modules'), join(siteCopy, 'node_modules'), 'dir');
-    await rm(join(siteCopy, 'app', 'api', 'catalog', 'route.ts'));
     const config = await readFile(join(siteCopy, 'next.config.ts'), 'utf8');
     if (!config.includes('CLOUDBASE_STATIC_BUILD')) throw new Error('Static build marker is missing from copied Next config.');
     const env = { ...process.env, CLOUDBASE_STATIC_BUILD: '1' };

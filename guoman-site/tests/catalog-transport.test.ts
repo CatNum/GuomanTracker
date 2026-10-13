@@ -1,26 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadCatalogData } from '../lib/catalog-transport.ts';
-
-const result = { items: [], live: false };
-
-test('CloudBase guests keep the snapshot without making an anonymous request', async () => {
-  let calls = 0;
-  assert.equal(await loadCatalogData({ transport: 'cloudbase', accountReady: false, call: async () => { calls++; return result; } }), null);
-  assert.equal(calls, 0);
+const series = { id: 'a', title: 'PG节目', platform: 'bilibili', url: 'https://www.bilibili.com/bangumi/play/ss12',
+  cover: '', status: 'ongoing', episodes: '更新至12集', checkedAt: '2026-10-13', source: 'PG', events: [], latestEpisode: 12 };
+test('guest reads all PG pages without an authenticated session', async () => {
+  const data = await loadCatalogData({ call: async (_action, payload) => payload.after
+    ? { items: [{ ...series, id: 'b' }], nextAfter: '' }
+    : { items: [series], nextAfter: 'a' } });
+  assert.deepEqual(data.items.map(item => item.id), ['a', 'b']);
+  assert.equal(data.items[0].latestEpisode, 12);
 });
-
-test('CloudBase refresh calls the fixed getCatalog action and validates its result', async () => {
-  let action = '';
-  const data = await loadCatalogData({ transport: 'cloudbase', accountReady: true, call: async (name, payload) => { action = name; assert.deepEqual(payload, {}); return result; } });
-  assert.equal(action, 'getCatalog');
-  assert.deepEqual(data, result);
+test('a later page failure rejects the whole read, allowing callers to keep previous data', async () => {
+  await assert.rejects(loadCatalogData({ call: async (_action, payload) => {
+    if (payload.after) throw Error('database unavailable');
+    return { items: [series], nextAfter: 'a' };
+  } }), /database unavailable/);
 });
-
-test('HTTP transport retains the public Next endpoint and rejects malformed results', async () => {
-  let url = '';
-  const fetchImpl = async (input: RequestInfo | URL) => { url = String(input); return new Response(JSON.stringify(result)); };
-  assert.deepEqual(await loadCatalogData({ transport: 'http', accountReady: false, call: async () => { throw Error(); }, fetchImpl }), result);
-  assert.equal(url, '/api/catalog');
-  await assert.rejects(loadCatalogData({ transport: 'http', accountReady: false, call: async () => null, fetchImpl: async () => new Response('{}') }));
+test('malformed or looping cursors cannot silently truncate or loop forever', async () => {
+  for (const response of [{}, { items: [], nextAfter: 'a' }, { items: [series], nextAfter: 'z' }]) {
+    await assert.rejects(loadCatalogData({ call: async () => response }));
+  }
+  await assert.rejects(loadCatalogData({ call: async () => ({ items: [series], nextAfter: 'a' }) }));
 });

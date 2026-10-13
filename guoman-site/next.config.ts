@@ -8,12 +8,7 @@ const nextConfig: NextConfig = {
   ...(process.env.CLOUDBASE_STATIC_BUILD === "1"
     ? { output: "export", trailingSlash: true }
     : {}),
-  env: {
-    NEXT_PUBLIC_CATALOG_TRANSPORT:
-      process.env.CLOUDBASE_STATIC_BUILD === "1"
-        ? "cloudbase"
-        : process.env.NEXT_PUBLIC_CATALOG_TRANSPORT || "http",
-  },
+
 };
 
 export default nextConfig;

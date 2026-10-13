@@ -10,7 +10,22 @@
       "timeout": 30,
       "memorySize": 256,
       "installDependency": true,
-      "ignore": ["node_modules", ".env*"]
+      "ignore": [
+        "node_modules",
+        ".env*"
+      ]
+    },
+    {
+      "name": "guoman-catalog",
+      "handler": "index.main",
+      "runtime": "Nodejs20.19",
+      "timeout": 30,
+      "memorySize": 256,
+      "installDependency": true,
+      "ignore": [
+        "node_modules",
+        ".env*"
+      ]
     },
     {
       "name": "guoman-scan",
@@ -19,8 +34,13 @@
       "timeout": 120,
       "memorySize": 256,
       "installDependency": true,
-      "ignore": ["node_modules", ".env*"],
-      "envVariables": {"GUOMAN_SCAN_SECRET": "{{env.GUOMAN_SCAN_SECRET}}"}
+      "ignore": [
+        "node_modules",
+        ".env*"
+      ],
+      "envVariables": {
+        "GUOMAN_SCAN_SECRET": "{{env.GUOMAN_SCAN_SECRET}}"
+      }
     }
   ]
 }

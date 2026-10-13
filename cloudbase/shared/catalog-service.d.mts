@@ -1,6 +1,4 @@
-export type CatalogResult = { items: unknown[]; live: boolean };
-export function createCatalogService(options: {
-  loadSeed: () => Promise<unknown[]> | unknown[];
-  fetchImpl?: typeof fetch;
-  now?: () => number;
-}): { getCatalog: () => Promise<CatalogResult> };
+export type CatalogResult = { items: unknown[]; nextAfter: string };
+export function createCatalogService(options: { store: { listSeriesPage(after: string): Promise<{ documents: unknown[]; next_after: string }> } }): {
+  getCatalog(payload?: { after?: string }): Promise<CatalogResult>;
+};

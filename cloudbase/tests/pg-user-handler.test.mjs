@@ -51,7 +51,7 @@ test('one handler accepts A then rejects missing, empty and anonymous contexts b
     assert.deepEqual(owners, ['alice', 'bob']);
     assert.equal(managers, 2);
     assert.equal(profiles, 0);
-    assert.equal(seedLoads, 1);
+    assert.equal(seedLoads, 0);
   } finally {
     if (previousUid === undefined) delete process.env.TCB_UUID;
     else process.env.TCB_UUID = previousUid;
@@ -60,22 +60,10 @@ test('one handler accepts A then rejects missing, empty and anonymous contexts b
   }
 });
 
-test('getCatalog requires trusted non-anonymous identity and never constructs the PG manager', async () => {
-  let managers = 0;
-  let reads = 0;
-  const handle = createPgUserHandler({
-    app: { auth: () => ({}) }, parseContext,
-    createManager: () => { managers++; throw new Error('PG must not be constructed'); },
-    loadSeed: async () => [], getCatalog: async () => { reads++; return { items: [{ id: 'public' }], live: true }; },
-  });
-  for (const context of [undefined, {}, contextFor('anonymous', 'true')]) {
-    assert.equal((await handle({ action: 'getCatalog', payload: {} }, context)).error.code, 'UNAUTHENTICATED');
-  }
-  assert.equal((await handle({ action: 'getCatalog', payload: { uid: 'forged' } }, contextFor('alice'))).error.code, 'INVALID_REQUEST');
-  assert.deepEqual(await handle({ action: 'getCatalog', payload: {} }, contextFor('alice')),
-    { ok: true, data: { items: [{ id: 'public' }], live: true } });
-  assert.equal(reads, 1);
-  assert.equal(managers, 0);
+test('personal function rejects public catalog actions rather than opening its identity gate', async () => {
+  const handle = createPgUserHandler({ parseContext, createManager: () => { throw Error('no PG required'); } });
+  assert.equal((await handle({ action: 'getCatalog', payload: {} }, {})).error.code, 'UNAUTHENTICATED');
+  assert.equal((await handle({ action: 'getCatalog', payload: {} }, contextFor('alice'))).error.code, 'INVALID_ACTION');
 });
 
 test('resolveEpisode validates input and identity without loading the database or catalog', async () => {

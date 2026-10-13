@@ -69,18 +69,12 @@ const monitoringLabels = {
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : "操作未完成，请稍后再试";
 
-export default function Tracker({
-  initial,
-  checkedAt,
-}: {
-  initial: Anime[];
-  checkedAt: string;
-}) {
+export default function Tracker() {
   const [mode, setMode] = useState<Mode>("guest"),
     [library, setLibrary] = useState<Library | null>(null),
     [view, setView] = useState<View>("draw");
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
-  const [catalogItems, setCatalogItems] = useState(initial);
+  const [catalogItems, setCatalogItems] = useState<Anime[]>([]);
   const [statsHelpOpen, setStatsHelpOpen] = useState(false);
   const [listFilter, setListFilter] = useState<WatchFilter>("all");
   const [listSort, setListSort] = useState<FollowSort>("priority");
@@ -110,7 +104,7 @@ export default function Tracker({
     [loginError, setLoginError] = useState(""),
     [needsLibraryRetry, setNeedsLibraryRetry] = useState(false),
     [pendingAccount, setPendingAccount] = useState(false);
-  const [now, setNow] = useState(Date.parse(checkedAt));
+  const [now, setNow] = useState(0);
   const [cooldownNow, setCooldownNow] = useState(0);
   const authLock = useRef(false);
   const mutationLock = useRef(false);
@@ -716,9 +710,8 @@ export default function Tracker({
                 key={view}
                 presentation={view === "calendar" ? "calendar" : "catalog"}
                 initial={catalogItems}
-                onCatalogSync={setCatalogItems}
+                onCatalogLoaded={setCatalogItems}
                 personalSeries={library?.series || []}
-                checkedAt={checkedAt}
                 embedded
                 followed={followed}
                 followBusy={busy}
@@ -733,7 +726,7 @@ export default function Tracker({
                   try {
                     await followCatalogSeries(
                       series,
-                      [...initial, ...(library?.series || [])],
+                      [...catalogItems, ...(library?.series || [])],
                       (action, payload) => perform(action, payload, `已追番《${series.title}》，可以设置观看进度。`),
                     );
                   } catch (error) { showNotice(errorText(error)); }

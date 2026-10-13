@@ -133,6 +133,7 @@ export function createPgStore(transport) {
     throw new TypeError('PG transport 缺少 read/list/commit');
   }
   return {
+    findSeriesByUrl: (url) => transport.findSeriesByUrl(url),
     async get(collection, id) {
       checkKey(collection, id);
       const found = normalizeRead(collection, id, await transport.read(collection, id));

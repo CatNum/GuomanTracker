@@ -1,6 +1,6 @@
 import { COLLECTIONS } from './user-service.mjs';
 
-const FUNCTIONS = Object.freeze({ read: 'get_document', list: 'list_follows_page', commit: 'commit_documents' });
+const FUNCTIONS = Object.freeze({ read: 'get_document', list: 'list_follows_page', commit: 'commit_documents', catalog: 'list_series_page', find: 'find_series_by_url' });
 const ALLOWED = new Set(Object.values(COLLECTIONS));
 const LIMIT = 256 * 1024;
 const compare = (a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
@@ -45,6 +45,29 @@ export function createManagementTransport(manager, { libraryMode = false } = {})
   }
 
   return {
+    async listSeriesPage(after = '') {
+      if (typeof after !== 'string' || after.length > 256) throw new TypeError('目录游标无效');
+      const result = await call('catalog', { after });
+      if (!Array.isArray(result.documents) || result.documents.length > 200 || typeof result.next_after !== 'string') throw new Error('目录响应无效');
+      let last = after;
+      for (const document of result.documents) {
+        checkDocument(document, document?._id, COLLECTIONS.series);
+        checkId(document._id);
+        if (compare(document._id, last) <= 0) throw new Error('目录排序无效');
+        last = document._id;
+      }
+      if (result.next_after && (result.documents.length !== 200 || result.next_after !== last)) throw new Error('目录游标无效');
+      return result;
+    },
+    async findSeriesByUrl(url) {
+      if (typeof url !== 'string' || !url || url.length > 2048) throw new TypeError('节目链接无效');
+      const result = await call('find', { url });
+      if (typeof result.exists !== 'boolean' || (!result.exists && Object.hasOwn(result, 'document'))) throw new Error('节目查询无效');
+      if (!result.exists) return null;
+      checkDocument(result.document, result.document?._id, COLLECTIONS.series);
+      if (result.document.url !== url) throw new Error('节目链接不一致');
+      return result.document;
+    },
     async read(collection, id) {
       checkCollection(collection);
       checkId(id);

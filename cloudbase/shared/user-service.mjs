@@ -22,14 +22,9 @@ const cleanFollow = ({ owner, kind, _id, ...follow }) => normalizeEpisodeProgres
 const cleanSeries = ({ _id, submittedBy, ...series }) => series;
 
 /** Creates the authenticated domain service. Identity is supplied by the trusted cloud-function entry, never by event data. */
-export function createUserService({ store, seed = [], now = () => new Date(), resolveMetadata }) {
-  const seedsById = new Map(seed.map((series) => [series.id, series]));
-  const seedsByUrl = new Map();
-  for (const series of seed) {
-    try { seedsByUrl.set(normalizeOfficialUrl(series.url).url, series); } catch { /* Invalid legacy links remain visible but cannot be submitted. */ }
-  }
+export function createUserService({ store, now = () => new Date(), resolveMetadata }) {
   async function lookupSeries(id, boundary = store) {
-    return await boundary.get(COLLECTIONS.series, id) ?? seedsById.get(id) ?? null;
+    return await boundary.get(COLLECTIONS.series, id);
   }
   async function legacyFollowSnapshot(uid, knownStats) {
     const stats = knownStats === undefined ? await store.get(COLLECTIONS.watch, statsId(uid)) : knownStats;
@@ -152,7 +147,7 @@ export function createUserService({ store, seed = [], now = () => new Date(), re
           official = normalizeOfficialUrl(payload.url);
         } catch { reject('INVALID_URL', '请填写支持的平台官方节目详情或播放链接（最多 2048 字符）。'); }
         if (!isSupportedPlatform(official.platform)) reject('UNSUPPORTED_PLATFORM', '目前仅支持哔哩哔哩、腾讯视频和优酷。');
-        const known = seedsByUrl.get(official.url);
+        const known = await store.findSeriesByUrl(official.url);
         const seriesId = known?.id ?? official.id;
         const existingBeforeTransaction = known ? null : await store.get(COLLECTIONS.series, seriesId);
         const isNewBeforeTransaction = !known && !existingBeforeTransaction;
@@ -193,7 +188,7 @@ export function createUserService({ store, seed = [], now = () => new Date(), re
           const needsRepair = !hasConfirmedTitle(existing, official);
           if (needsRepair && !resolvedMetadata) metadataFailure();
           const series = {
-            ...(existing ?? { id: seriesId, platform: official.platform, url: official.url, status: 'unknown', episodes: '待核验', events: [], checkedAt: at, source: official.url }),
+            ...(existing ?? { id: seriesId, platform: official.platform, url: official.url, cover: '', status: 'unknown', episodes: '待核验', events: [], checkedAt: at, source: official.url }),
             ...(needsRepair ? { ...resolvedMetadata, metadataPending: false } : {}),
             ...(!target ? { monitoring: 'queued', nextScanAt: at } : {}),
           };

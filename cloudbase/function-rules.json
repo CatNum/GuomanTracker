@@ -1,5 +1,6 @@
 {
   "*": {"invoke": false},
+  "guoman-catalog": {"invoke": true},
   "guoman-user": {"invoke": "auth.loginType != 'ANONYMOUS' && auth != null"},
   "guoman-scan": {"invoke": false}
 }

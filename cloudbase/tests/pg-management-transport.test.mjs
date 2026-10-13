@@ -14,7 +14,7 @@ function manager(reply) {
     database: {
       async executePGSql({ Sql }) {
         calls.push(Sql);
-        const match = /^SELECT guoman_private\.(get_document|list_follows_page|commit_documents)\(pg_catalog\.convert_from\(pg_catalog\.decode\('([0-9a-f]+)', 'hex'\), 'UTF8'\)::jsonb\) AS result$/.exec(Sql);
+        const match = /^SELECT guoman_private\.(get_document|list_follows_page|commit_documents|list_series_page|find_series_by_url)\(pg_catalog\.convert_from\(pg_catalog\.decode\('([0-9a-f]+)', 'hex'\), 'UTF8'\)::jsonb\) AS result$/.exec(Sql);
         assert.ok(match, 'only a fixed private function and hex-encoded JSON may reach SQL');
         return reply(match[1], JSON.parse(Buffer.from(match[2], 'hex').toString('utf8')));
       },
@@ -150,4 +150,32 @@ test('nested array SQL row cannot masquerade as TX_RETRY and replay a write', as
   }), (error) => error instanceof CommitUnconfirmedError && error.code === 'TX_OUTCOME_UNKNOWN');
   assert.equal(callbacks, 1);
   assert.equal(commits, 1);
+});
+
+
+test('public PG pages use a fixed read function and reject foreign collections or unstable cursors', async () => {
+  const mg = manager(async (operation, args) => {
+    assert.equal(operation, 'list_series_page');
+    assert.deepEqual(args, { after: '' });
+    return rpc({ documents: [{ _id: 'bili-1', id: 'bili-1', platform: 'bilibili' }], next_after: '' });
+  });
+  const transport = createManagementTransport(mg, { libraryMode: true });
+  assert.equal((await transport.listSeriesPage('')).documents[0].id, 'bili-1');
+  await assert.rejects(transport.commit({ reads: [], writes: [] }));
+  for (const result of [
+    { documents: [{ _id: 'user', owner: 'alice' }], next_after: '' },
+    { documents: [{ _id: 'bili-1', id: 'bili-1' }], next_after: 'bili-2' },
+    { documents: [], next_after: 'bili-1' },
+  ]) await assert.rejects(createManagementTransport(manager(async () => rpc(result))).listSeriesPage(''));
+});
+
+test('canonical URL lookup keeps the PG program identifier and validates its response', async () => {
+  const url = 'https://www.bilibili.com/bangumi/play/ss12';
+  const transport = createManagementTransport(manager(async (operation, args) => {
+    assert.equal(operation, 'find_series_by_url');
+    assert.deepEqual(args, { url });
+    return rpc({ exists: true, document: { _id: 'bili-12', id: 'bili-12', url } });
+  }));
+  assert.equal((await transport.findSeriesByUrl(url)).id, 'bili-12');
+  await assert.rejects(createManagementTransport(manager(async () => rpc({ exists: true, document: { _id: 'a', id: 'a', url: 'foreign' } }))).findSeriesByUrl(url));
 });

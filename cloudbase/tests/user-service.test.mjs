@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { createUserService } from '../shared/user-service.mjs';
+import { createUserService as createDatabaseUserService } from '../shared/user-service.mjs';
 import { createCloudbaseStore } from '../shared/cloudbase-store.mjs';
 import { latestPublishedEpisode } from '../shared/published-episode.mjs';
 import { CommitUnconfirmedError } from '../shared/pg-store.mjs';
@@ -23,6 +23,7 @@ class MemoryStore {
   async get(collection, id) { return structuredClone(this.maps.get(`${collection}/${id}`) ?? null); }
   async put(collection, id, data) { this.maps.set(`${collection}/${id}`, structuredClone(data)); }
   async remove(collection, id) { this.maps.delete(`${collection}/${id}`); }
+  async findSeriesByUrl(url) { return [...this.maps.entries()].filter(([key]) => key.startsWith('guoman_series/')).map(([,value]) => structuredClone(value)).find(item => item.url === url) ?? null; }
   async listFollows(owner) {
     return [...this.maps.entries()].filter(([key, value]) => key.startsWith('guoman_watch_state/') && value.owner === owner && value.kind === 'follow').map(([, value]) => structuredClone(value));
   }
@@ -46,6 +47,12 @@ class MemoryStore {
   }
 }
 
+function createTestService({ seed = [], ...options }) {
+  for (const item of seed) if (options.store.maps && !options.store.maps.has('guoman_series/' + item.id))
+    options.store.maps.set('guoman_series/' + item.id, structuredClone(item));
+  return createDatabaseUserService(options);
+}
+
 function accountStats(store, uid = 'alice') {
   return [...store.maps.values()].find((value) => value.kind === 'stats' && value.owner === uid) ?? null;
 }
@@ -54,7 +61,7 @@ const seed = [{ id: 'bili-seed', title: '已收录国漫', platform: 'bilibili',
 function setup(start = '2026-10-05T00:00:00.000Z') {
   const store = new MemoryStore();
   let clock = new Date(start);
-  const service = createUserService({ store, seed, now: () => clock, resolveMetadata: async () => ({ title: '官方测试节目' }) });
+  const service = createTestService({ store, seed, now: () => clock, resolveMetadata: async () => ({ title: '官方测试节目' }) });
   const call = (uid, action, payload = {}, extra = {}) => service({ action, payload, ...extra }, { uid, displayName: uid });
   return { store, call, advance: (milliseconds = 86400000) => { clock = new Date(clock.getTime() + milliseconds); } };
 }
@@ -98,7 +105,7 @@ test('new submissions resolve official metadata once before the transaction whil
   const store = new MemoryStore();
   const order = [];
   let calls = 0;
-  const service = createUserService({
+  const service = createTestService({
     store,
     seed,
     resolveMetadata: async (official) => {
@@ -125,7 +132,7 @@ test('daily submit, follow, and monitor quotas reject new links before metadata 
   const sha = (value) => createHash('sha256').update(value).digest('hex');
   let calls = 0;
   const dailyStore = new MemoryStore();
-  const dailyService = createUserService({ store: dailyStore, seed, resolveMetadata: async () => { calls++; return { title: '真实标题' }; } });
+  const dailyService = createTestService({ store: dailyStore, seed, resolveMetadata: async () => { calls++; return { title: '真实标题' }; } });
   const dailyCall = (payload) => dailyService({ action: 'submit', payload }, { uid: 'alice' });
   for (let index = 0; index < 10; index++) {
     const result = await dailyCall({ url: `https://www.bilibili.com/bangumi/play/ss${7654000 + index}` });
@@ -142,7 +149,7 @@ test('daily submit, follow, and monitor quotas reject new links before metadata 
   for (let index = 0; index < 500; index++) {
     await followStore.put('guoman_watch_state', `legacy-follow-${index}`, { kind: 'follow', owner: 'alice', seriesId: `legacy-${index}` });
   }
-  const followService = createUserService({ store: followStore, seed, resolveMetadata: async () => { followCalls++; return { title: '真实标题' }; } });
+  const followService = createTestService({ store: followStore, seed, resolveMetadata: async () => { followCalls++; return { title: '真实标题' }; } });
   const followBlocked = await followService({ action: 'submit', payload: { url: 'https://www.bilibili.com/bangumi/play/ss7655000' } }, { uid: 'alice' });
   assert.equal(followBlocked.error.code, 'FOLLOW_LIMIT');
   assert.equal(followCalls, 0);
@@ -152,7 +159,7 @@ test('daily submit, follow, and monitor quotas reject new links before metadata 
   const day = new Date('2026-10-05T00:00:00.000Z').getTime() + 8 * 3600000;
   const chinaDay = new Date(day).toISOString().slice(0, 10);
   await monitorStore.put('guoman_watch_state', `scan-quota-${sha(JSON.stringify(['alice', chinaDay]))}`, { kind: 'scan-quota', owner: 'alice', day: chinaDay, count: 20 });
-  const monitorService = createUserService({ store: monitorStore, seed, now: () => new Date('2026-10-05T00:00:00.000Z'), resolveMetadata: async () => { monitorCalls++; return { title: '真实标题' }; } });
+  const monitorService = createTestService({ store: monitorStore, seed, now: () => new Date('2026-10-05T00:00:00.000Z'), resolveMetadata: async () => { monitorCalls++; return { title: '真实标题' }; } });
   const monitorBlocked = await monitorService({ action: 'submit', payload: { url: 'https://www.bilibili.com/bangumi/play/ss7655001' } }, { uid: 'alice' });
   assert.equal(monitorBlocked.error.code, 'RATE_LIMITED');
   assert.equal(monitorCalls, 0);
@@ -161,7 +168,7 @@ test('daily submit, follow, and monitor quotas reject new links before metadata 
 test('metadata resolution failure writes nothing and a later successful retry saves once', async () => {
   const store = new MemoryStore();
   let available = false;
-  const service = createUserService({ store, seed, resolveMetadata: async () => {
+  const service = createTestService({ store, seed, resolveMetadata: async () => {
     if (!available) throw new Error('PRIVATE_TIMEOUT_DETAIL');
     return { title: '官方节目名称' };
   } });
@@ -169,7 +176,7 @@ test('metadata resolution failure writes nothing and a later successful retry sa
   const url = 'https://www.bilibili.com/bangumi/play/ss457';
   const failed = await call('submit', { url });
   assert.deepEqual(failed, { ok: false, error: { code: 'METADATA_UNAVAILABLE', message: '补录失败：未能识别官方节目名称，本次未保存任何更改。请稍后重试或使用该节目的其他官方链接。' } });
-  assert.equal(store.maps.size, 0);
+  assert.equal(store.maps.size, seed.length);
   available = true;
   const repeated = await call('submit', { url });
   assert.equal(repeated.ok, true);
@@ -188,7 +195,7 @@ test('all supported platforms reject unrecognized official responses without wri
   ];
   for (const [platform, url, body, contentType] of cases) await t.test(platform, async () => {
     const store = new MemoryStore();
-    const service = createUserService({ store, resolveMetadata: official => resolveOfficialMetadata(official, {
+    const service = createTestService({ store, resolveMetadata: official => resolveOfficialMetadata(official, {
       fetcher: async () => new Response(body, { headers: { 'content-type': contentType } }),
     }) });
     const result = await service({ action: 'submit', payload: { url, title: '用户自填名称不能替代官方识别' } }, { uid: 'alice' });
@@ -206,7 +213,7 @@ test('all supported platforms save only resolved official titles while episode v
   ];
   for (const [platform, url, body, contentType, title] of cases) await t.test(platform, async () => {
     const store = new MemoryStore();
-    const service = createUserService({ store, resolveMetadata: official => resolveOfficialMetadata(official, {
+    const service = createTestService({ store, resolveMetadata: official => resolveOfficialMetadata(official, {
       fetcher: async () => new Response(body, { headers: { 'content-type': contentType } }),
     }) });
     const result = await service({ action: 'submit', payload: { url } }, { uid: 'alice' });
@@ -221,7 +228,7 @@ test('all supported platforms save only resolved official titles while episode v
 test('missing resolver and empty metadata cannot create a submission', async (t) => {
   for (const metadata of [undefined, null, {}, { title: '' }, { title: '   ' }]) await t.test(JSON.stringify(metadata) ?? 'missing resolver', async () => {
     const store = new MemoryStore();
-    const service = createUserService({ store, ...(metadata === undefined ? {} : { resolveMetadata: async () => metadata }) });
+    const service = createTestService({ store, ...(metadata === undefined ? {} : { resolveMetadata: async () => metadata }) });
     const result = await service({ action: 'submit', payload: { url: 'https://www.bilibili.com/bangumi/play/ss457' } }, { uid: 'alice' });
     assert.equal(result.error?.code, 'METADATA_UNAVAILABLE');
     assert.equal(store.maps.size, 0);
@@ -234,7 +241,7 @@ test('legacy pending submissions are retried and only repaired when official res
   const legacy = { ...seed[0], id: official.id, url: official.url, platform: 'tencent', title: '腾讯视频待核验节目 mcv8hkc8zk8lnov', metadataPending: true };
   await store.put('guoman_series', official.id, legacy);
   let available = false;
-  const service = createUserService({ store, resolveMetadata: async () => available ? { title: '完美世界', cover: 'https://img.example.test/cover.jpg' } : null });
+  const service = createTestService({ store, resolveMetadata: async () => available ? { title: '完美世界', cover: 'https://img.example.test/cover.jpg' } : null });
   const call = () => service({ action: 'submit', payload: { url: official.url } }, { uid: 'alice' });
   const before = structuredClone(store.maps);
   assert.equal((await call()).error?.code, 'METADATA_UNAVAILABLE');
@@ -256,7 +263,7 @@ test('retrying an already followed pending record preserves progress and quotas 
   const legacy = { ...added.data.series, title: 'B站待核验节目 ss456', metadataPending: true };
   await store.put('guoman_series', id, legacy);
   let available = false;
-  const service = createUserService({ store, resolveMetadata: async () => available ? { title: '识别后的官方名称' } : null });
+  const service = createTestService({ store, resolveMetadata: async () => available ? { title: '识别后的官方名称' } : null });
   const retry = () => service({ action: 'submit', payload: { url } }, { uid: 'alice' });
   const before = structuredClone(store.maps);
   assert.equal((await retry()).error?.code, 'METADATA_UNAVAILABLE');
@@ -277,7 +284,7 @@ test('a title becoming pending during submission is rejected at the transaction 
     await store.put('guoman_series', official.id, { ...confirmed, metadataPending: true });
     return transaction(callback);
   };
-  const service = createUserService({ store });
+  const service = createTestService({ store });
   const result = await service({ action: 'submit', payload: { url: official.url } }, { uid: 'alice' });
   assert.equal(result.error?.code, 'METADATA_UNAVAILABLE');
   assert.equal(store.maps.size, 1);
@@ -287,7 +294,7 @@ test('a title becoming pending during submission is rejected at the transaction 
 test('membership stats preserve unknown fields and increment only on real follow changes', async () => {
   const store = new MemoryStore();
   const catalog = [...seed, { ...seed[0], id: 'bili-next', url: 'https://www.bilibili.com/bangumi/play/ss124' }];
-  const service = createUserService({ store, seed: catalog });
+  const service = createTestService({ store, seed: catalog });
   const call = (action, payload = {}) => service({ action, payload }, { uid: 'alice' });
   await call('follow', { seriesId: 'bili-seed' });
   let stats = accountStats(store);
@@ -325,7 +332,7 @@ test('legacy follows without account stats keep title order and rebuild the coun
 
 test('library returns a snapshot-consistent full order and retries membership changes during list', async () => {
   const store = new MemoryStore();
-  const service = createUserService({ store, seed });
+  const service = createTestService({ store, seed });
   await service({ action: 'follow', payload: { seriesId: 'bili-seed' } }, { uid: 'alice' });
   const statsKey = [...store.maps.keys()].find((key) => key.startsWith('guoman_watch_state/stats-'));
   const originalList = store.listFollows.bind(store);
@@ -347,7 +354,7 @@ test('library returns a snapshot-consistent full order and retries membership ch
 test('reorder updates one stats document for 500 follows and rejects malformed or stale orders', async () => {
   const store = new MemoryStore();
   const catalog = manySeed(500);
-  const service = createUserService({ store, seed: catalog });
+  const service = createTestService({ store, seed: catalog });
   const follows = catalog.map((series) => ({ owner: 'alice', kind: 'follow', seriesId: series.id, currentEpisode: 0, episodeCompleted: false, paused: false, updatedAt: '2026-10-05T00:00:00.000Z', version: 1 }));
   assert.equal((await service({ action: 'follow', payload: { seriesId: catalog[0].id } }, { uid: 'alice' })).ok, true);
   for (const follow of follows.slice(1)) await store.put('guoman_watch_state', `follow-${follow.seriesId}`, follow);
@@ -403,7 +410,7 @@ test('reorder detects membership ABA and concurrent order changes but ignores pr
 test('unsupported platforms reject submit, follow, progress, and open while unfollow remains available', async () => {
   const iqiyi = { id: 'iqiyi-seed', title: '旧平台节目', platform: 'iqiyi', url: 'https://www.iqiyi.com/a_abc.html' };
   const { call, store } = setup();
-  const service = createUserService({ store, seed: [...seed, iqiyi] });
+  const service = createTestService({ store, seed: [...seed, iqiyi] });
   const invoke = (action, payload) => service({ action, payload }, { uid: 'alice' });
   for (const [action, payload] of [
     ['submit', { url: iqiyi.url }], ['follow', { seriesId: iqiyi.id }],
@@ -418,7 +425,7 @@ test('daily submission limit is atomic, excludes duplicates and resets in China 
   assert.equal(results.filter((result) => result.ok).length, 10);
   assert.equal(results.filter((result) => result.error?.code === 'RATE_LIMITED').length, 2);
   assert.equal((await call('alice', 'submit', { title: '重复补录', url: 'https://www.bilibili.com/bangumi/play/ss1000' })).ok, true);
-  assert.equal([...store.maps.keys()].filter((key) => key.startsWith('guoman_series/')).length, 10);
+  assert.equal([...store.maps.keys()].filter((key) => key.startsWith('guoman_series/')).length, 11);
   advance();
   assert.equal((await call('alice', 'submit', { title: '第二天', url: 'https://www.bilibili.com/bangumi/play/ss9999' })).ok, true);
 });
@@ -465,7 +472,7 @@ test('validation errors and internal failures use safe envelopes', async () => {
   assert.equal((await call('alice', 'submit', { title: '非法', url: 'https://example.com/ss1' })).error.code, 'INVALID_URL');
   assert.equal((await call('alice', 'submit', { title: '超长链接', url: `https://www.bilibili.com/bangumi/play/ss100?tracking=${'x'.repeat(2048)}` })).error.code, 'INVALID_URL');
   assert.equal((await call('alice', 'follow', { seriesId: 'unknown' })).error.code, 'NOT_FOUND');
-  const service = createUserService({ store: { listFollows: async () => { throw new Error('SECRET_INTERNAL'); } }, seed });
+  const service = createTestService({ store: { listFollows: async () => { throw new Error('SECRET_INTERNAL'); } }, seed });
   const result = await service({ action: 'library' }, { uid: 'alice' });
   assert.equal(result.error.code, 'SERVICE_UNAVAILABLE');
   assert.ok(!JSON.stringify(result).includes('SECRET_INTERNAL'));
@@ -477,7 +484,7 @@ test('uncertain PG commit returns a distinct refresh-required envelope without l
     listFollows: async () => [],
     transaction: async () => { throw new CommitUnconfirmedError(new Error('PRIVATE_NETWORK_DETAIL')); },
   };
-  const service = createUserService({ store, seed });
+  const service = createTestService({ store, seed });
   const result = await service({ action: 'unfollow', payload: { seriesId: 'bili-seed' } }, { uid: 'alice' });
   assert.deepEqual(result, {
     ok: false,
@@ -487,7 +494,7 @@ test('uncertain PG commit returns a distinct refresh-required envelope without l
 });
 
 test('CloudBase anonymous identities with a uid are rejected', async () => {
-  const service = createUserService({ store: new MemoryStore(), seed });
+  const service = createTestService({ store: new MemoryStore(), seed });
   assert.equal((await service({ action: 'library' }, { uid: 'anonymous-uid', isAnonymous: true })).error.code, 'UNAUTHENTICATED');
 });
 
@@ -528,7 +535,7 @@ test('daily new-monitor budget rejects the 21st target, permits shared targets, 
   const store = new MemoryStore();
   const catalog = manySeed(23);
   let clock = new Date('2026-10-05T15:59:00.000Z');
-  const service = createUserService({ store, seed: catalog, now: () => clock });
+  const service = createTestService({ store, seed: catalog, now: () => clock });
   const follow = (uid, index) => service({ action: 'follow', payload: { seriesId: catalog[index].id } }, { uid });
   const first = await Promise.all(Array.from({ length: 21 }, (_, index) => follow('alice', index)));
   assert.equal(first.filter((result) => result.ok).length, 20);
@@ -546,7 +553,7 @@ test('500-follow limit is atomic, covers submission, and releases capacity on un
   const store = new MemoryStore();
   const catalog = manySeed(502);
   for (const item of catalog) await store.put('guoman_monitor_targets', item.id, { seriesId: item.id, source: 'hot' });
-  const service = createUserService({ store, seed: catalog });
+  const service = createTestService({ store, seed: catalog });
   const call = (action, payload) => service({ action, payload }, { uid: 'alice' });
   for (let index = 0; index < 499; index++) assert.equal((await call('follow', { seriesId: catalog[index].id })).ok, true);
   const final = await Promise.all([call('follow', { seriesId: catalog[499].id }), call('follow', { seriesId: catalog[500].id })]);
@@ -576,7 +583,7 @@ test('progress uses actual published episodes rather than totals, schedules, or 
     { episodes: '24集全', status: 'finished', latestEpisode: undefined, events: [], maximum: 24 },
   ];
   for (const fixture of fixtures) {
-    const service = createUserService({ store: new MemoryStore(), seed: [{ ...seed[0], ...fixture }], now: () => new Date(now) });
+    const service = createTestService({ store: new MemoryStore(), seed: [{ ...seed[0], ...fixture }], now: () => new Date(now) });
     const call = (action, payload) => service({ action, payload }, { uid: 'alice' });
     await call('follow', { seriesId: 'bili-seed' });
     const progress = { seriesId: 'bili-seed', currentEpisode: fixture.maximum + 1, episodeCompleted: false, paused: false, version: 1 };
@@ -666,4 +673,17 @@ test('following starts independent transaction reads together instead of waiting
   waiting.forEach(resolve => resolve());
   assert.equal((await pending).ok, true);
   assert.equal(simultaneousReads, 5);
+});
+
+
+test('an absent PG program cannot be followed using a file fallback', async () => {
+  const service = createDatabaseUserService({ store: new MemoryStore(), seed });
+  assert.equal((await service({ action: 'follow', payload: { seriesId: 'bili-seed' } }, { uid: 'alice' })).error?.code, 'NOT_FOUND');
+});
+test('PG program updates become the personal library source without rebuilding', async () => {
+  const { store, call } = setup();
+  await call('alice', 'follow', { seriesId: 'bili-seed' });
+  const old = await store.get('guoman_series', 'bili-seed');
+  await store.put('guoman_series', 'bili-seed', { ...old, latestEpisode: 15, episodes: '更新至15集' });
+  assert.equal((await call('alice', 'library')).data.series[0].latestEpisode, 15);
 });
