@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "我的追番 · 国漫追更",
-  description: "管理国漫追番和观看进度，找到已更新、还没看的故事，直达官方播放。",
+  title: "国漫追番 · 要看什么与新番周历",
+  description: "抽取未看国漫、查看新番周历，管理真实追番和观看进度，直达官方播放。",
   other: {
     "codex-preview": "development",
   },

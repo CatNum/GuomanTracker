@@ -6,6 +6,8 @@ export type Anime = {
   status: string; episodes: string; checkedAt: string; source: string;
   events: { at: number; label: string; published: boolean; delayed: boolean }[];
   days?: number[]; time?: string; schedule?: string;
+  /** scheduleCheckedAt（排期核验时间）：避免新标题的核验时间延长旧排期有效期。 */
+  scheduleCheckedAt?: string;
   latestEpisode?: number; monitoring?: 'queued'|'active'|'unsupported'|'error';
   metadataPending?: boolean;
   lastScanAt?: string; lastScanAttemptAt?: string; nextScanAt?: string; scanError?: string;
@@ -21,7 +23,7 @@ export const dayNames=['周日','周一','周二','周三','周四','周五','�
 export function chinaDay(at:number){return new Date(at+8*3600000).getUTCDay()}
 export function chinaDate(at:number){return new Date(at+8*3600000).toISOString().slice(0,10)}
 export function timeText(at:number){return new Date(at+8*3600000).toISOString().slice(11,16)}
-export function validSchedule(a:Anime,now:number){return !!a.days?.length && !!a.time && now-Date.parse(a.checkedAt)<30*86400000}
+export function validSchedule(a:Anime,now:number){return !!a.days?.length && !!a.time && now-Date.parse(a.scheduleCheckedAt??a.checkedAt)<30*86400000}
 export function upcoming(a:Anime,now:number){
   const dated=a.events.filter(e=>e.at>=now&&!e.delayed).sort((x,y)=>x.at-y.at)[0];
   if(dated) return dated.at;

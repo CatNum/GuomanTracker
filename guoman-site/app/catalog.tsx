@@ -5,12 +5,16 @@ import { Play, Search, CalendarDays, Layers3, ExternalLink, Clock3, RefreshCw, C
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
 import Link from 'next/link';
-import { platforms, chinaDay, chinaDate, dayNames, scheduleText, upcoming, validSchedule, isSupportedPlatform, SUPPORTED_PLATFORMS, type Anime } from '@/lib/catalog';
+import { OperationButton } from '@/components/operation-button';
+import { platforms, chinaDay, chinaDate, dayNames, scheduleText, upcoming, isSupportedPlatform, SUPPORTED_PLATFORMS, type Anime } from '@/lib/catalog';
+import { followedCatalog } from '@/lib/personal-catalog';
+import { weeklySchedule, unverifiedSchedule } from '@/lib/weekly-schedule';
 import { paginateCatalog } from '@/lib/catalog-pagination';
 import { catalogTransport, loadCatalogData } from '@/lib/catalog-transport';
-export default function Catalog({initial,checkedAt,embedded=false,onFollow,followed=[],accountReady=true,accountKey='',onLogin}:{initial:Anime[];checkedAt:string;embedded?:boolean;onFollow?:(series:Anime)=>void;followed?:string[];accountReady?:boolean;accountKey?:string;onLogin?:()=>void}){
+export default function Catalog({initial,checkedAt,embedded=false,presentation='catalog',personalSeries=[],onFollow,followed=[],followBusy=false,followBlocked=false,pendingFollowId='',accountReady=true,accountKey='',onLogin,onCatalogSync}:{initial:Anime[];checkedAt:string;embedded?:boolean;presentation?:'catalog'|'calendar';personalSeries?:Anime[];onFollow?:(series:Anime)=>void;followed?:string[];followBusy?:boolean;followBlocked?:boolean;pendingFollowId?:string;accountReady?:boolean;accountKey?:string;onLogin?:()=>void;onCatalogSync?:(items:Anime[])=>void}){
  const Content=embedded?'div':'main';
- const [items,setItems]=useState(initial.filter(a=>isSupportedPlatform(a.platform)));const [now,setNow]=useState(0);const [query,setQuery]=useState('');const [platform,setPlatform]=useState('all');const [status,setStatus]=useState('all');const [view,setView]=useState('all');const [day,setDay]=useState(-1);const [page,setPage]=useState(1);const [refresh,setRefresh]=useState(false);const [note,setNote]=useState('');const requestId=useRef(0);const accountToken=useRef<{active:boolean}|null>(null);
+ const [items,setItems]=useState(initial.filter(a=>isSupportedPlatform(a.platform)));const [now,setNow]=useState(0);const [query,setQuery]=useState('');const [platform,setPlatform]=useState('all');const [status,setStatus]=useState('all');const [view,setView]=useState(presentation==='calendar'?'week':'all');const [day,setDay]=useState<number|null>(null);const [page,setPage]=useState(1);const [refresh,setRefresh]=useState(false);const [note,setNote]=useState('');const requestId=useRef(0);const accountToken=useRef<{active:boolean}|null>(null);
+ const scopedItems=useMemo(()=>presentation==='calendar'?(accountReady?followedCatalog(items,personalSeries,followed):[]):items,[items,personalSeries,followed,presentation,accountReady]);
  useLayoutEffect(()=>{const token={active:true};accountToken.current=token;return()=>{token.active=false}},[accountReady,accountKey]);
  useEffect(()=>{const initial=window.setTimeout(()=>setNow(Date.now()),0);const t=setInterval(()=>setNow(Date.now()),60000);return()=>{clearTimeout(initial);clearInterval(t)}},[]);
  async function reload(){
@@ -18,7 +22,7 @@ export default function Catalog({initial,checkedAt,embedded=false,onFollow,follo
   try{
    const data=await loadCatalogData({transport:catalogTransport,accountReady,call:async(action,payload)=>await import('@/lib/cloudbase-client').then(({cloudCall})=>cloudCall(action,payload))});
    if(!isCurrent()||!data)return;
-   setItems(data.items.filter(a=>isSupportedPlatform(a.platform)));
+   if(data.live){const synced=data.items.filter(a=>isSupportedPlatform(a.platform));setItems(synced);onCatalogSync?.(synced);}
    setNote(data.live?'已同步官方国创更新日历':'官方日历暂不可用，正在展示最近核验的收录');
   }catch{if(isCurrent())setNote('同步未完成，仍可浏览已收录的作品。');}
   finally{if(isCurrent())setRefresh(false)}
@@ -47,46 +51,47 @@ export default function Catalog({initial,checkedAt,embedded=false,onFollow,follo
    name:'filter_guoman_catalog',title:'筛选国漫合集',description:'按名称和官方平台筛选当前国漫合集，并更新页面显示；不会打开播放链接。',
    inputSchema:{type:'object',properties:{query:{type:'string',maxLength:100},platform:{type:'string',enum:['all',...SUPPORTED_PLATFORMS]}},additionalProperties:false},
    annotations:{readOnlyHint:false,untrustedContentHint:true},
-   async execute(raw:unknown){const value=input.parse(raw);setQuery(value.query);setPlatform(value.platform);setStatus('all');setView('all');setDay(-1);setPage(1);
+   async execute(raw:unknown){const value=input.parse(raw);setQuery(value.query);setPlatform(value.platform);setStatus('all');setView(presentation==='calendar'?'week':'all');setDay(null);setPage(1);
     await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
-    const matches=items.filter(a=>(value.platform==='all'||a.platform===value.platform)&&a.title.toLowerCase().includes(value.query.trim().toLowerCase()));
+    const matches=scopedItems.filter(a=>(value.platform==='all'||a.platform===value.platform)&&a.title.toLowerCase().includes(value.query.trim().toLowerCase()));
     return {total:matches.length,items:matches.slice(0,20).map(a=>({id:a.id,title:a.title,platform:a.platform,url:a.url}))};}
   },{signal:lifecycle.signal})).catch(()=>{});}catch{}
   return()=>lifecycle.abort();
- },[items]);
- const t=now||Date.parse(checkedAt);const today=chinaDay(t);const counts=Object.fromEntries(Object.keys(platforms).map(k=>[k,items.filter(a=>a.platform===k).length]));
+ },[scopedItems,presentation]);
+ const t=now||Date.parse(checkedAt);const today=chinaDay(t);const selectedDay=day??today;const counts=Object.fromEntries(Object.keys(platforms).map(k=>[k,scopedItems.filter(a=>a.platform===k).length]));
  const scheduled=items.filter(a=>upcoming(a,t)!==null||a.events.some(e=>chinaDate(e.at)===chinaDate(t)));
- const filtered=useMemo(()=>items.filter(a=>{
+ const calendarWeek=useMemo(()=>weeklySchedule(scopedItems,t),[scopedItems,t]);
+ const pendingSchedules=useMemo(()=>unverifiedSchedule(scopedItems,t),[scopedItems,t]);
+ const weeklyIds=useMemo(()=>new Set(calendarWeek.filter(d=>selectedDay===-1||d.day===selectedDay).flatMap(d=>d.entries.map(e=>e.series.id))),[calendarWeek,selectedDay]);
+ const filtered=useMemo(()=>scopedItems.filter(a=>{
   if(platform!=='all'&&a.platform!==platform)return false;
   if(query&&!a.title.toLowerCase().includes(query.trim().toLowerCase()))return false;
   if(status!=='all'&&a.status!==status)return false;
-  if(view==='week'){
-    const weekStart=Date.parse(chinaDate(t)+'T00:00:00+08:00')-((chinaDay(t)+6)%7)*86400000;const dates=a.events.filter(e=>e.at>=weekStart&&e.at<weekStart+7*86400000);
-    if(!dates.length&&!validSchedule(a,t))return false;
-    if(day!==-1&&!dates.some(e=>chinaDay(e.at)===day)&&!(validSchedule(a,t)&&a.days?.includes(day)))return false;
-  }
+  if(view==='week'&&!weeklyIds.has(a.id))return false;
   return true;
  }).sort((a,b)=>{
   const x=upcoming(a,t),y=upcoming(b,t);
   if(x!==null&&y!==null)return x-y;
   if(x!==null)return -1;if(y!==null)return 1;return 0;
- }),[items,platform,query,status,view,day,t]);
+ }),[scopedItems,platform,query,status,view,weeklyIds,t]);
  const {pages,effectivePage,visible,previousPage,nextPage}=paginateCatalog(filtered,page,18);
- function reset(){setPlatform('all');setStatus('all');setQuery('');setDay(-1);setPage(1)}
+ function reset(){setPlatform('all');setStatus('all');setQuery('');setDay(null);setPage(1)}
  const dateLabel=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric',weekday:'long'}).format(t);
  return <div className={embedded?'embedded-catalog':'site-shell'}>
   {!embedded&&<header className="site-header"><Link className="brand" href="/" aria-label="国漫追更首页"><span className="brand-icon"><Play size={19} fill="currentColor"/></span><b>国漫<span>追更</span></b><span className="brand-en">GUOMAN TRACKER</span></Link><div className="header-right"><span className="header-note">一个入口，找到你的国漫</span><a href="#catalog" className="header-link"><Layers3 size={16}/>浏览合集</a></div></header>}
   <Content>
-   <div className="intro"><div><div className="eyebrow"><span/>国漫更新指南</div><h1>好故事，<span>不漏更。</span></h1><p>汇集各平台国漫与更新安排，直达官方播放。</p></div><div className="date-box"><CalendarDays size={19}/><div><strong>{dateLabel}</strong><span>北京时间 · UTC+8</span></div></div></div>
-   <section className="overview" aria-label="收录概况"><div><span>已收录作品</span><strong>{items.length.toLocaleString()}<small>部</small></strong></div><div><span>有更新安排</span><strong>{scheduled.length}<small>部</small></strong></div><div><span>可用平台</span><strong>{SUPPORTED_PLATFORMS.length.toString().padStart(2,'0')}<small>个</small></strong></div><div className="overview-last"><TvMinimal size={23}/><p>只记录更新信息<small>观看体验，留给官方平台</small></p></div></section>
+   <div className="intro"><div><div className="eyebrow"><span/>{presentation==='calendar'?'我的追番排期':'国漫更新指南'}</div><h1>{presentation==='calendar'?'新番周历':'国漫合集'}</h1><p>{presentation==='calendar'?'仅展示已追番作品的本周排期，全部更新请查看国漫合集。':'汇集各平台国漫与更新安排，直达官方播放。'}</p>
+    {presentation==='calendar'&&<p className="calendar-verification-note"><span>排期待核验的番剧不展示在新番周历中。</span>{SUPPORTED_PLATFORMS.map(key=><span className="calendar-verification-count" key={key}>{platforms[key].name}待核验 {pendingSchedules.filter(series=>series.platform===key).length} 部</span>)}</p>}
+   </div><div className="date-box"><CalendarDays size={19}/><div><strong>{dateLabel}</strong><span>北京时间 · UTC+8</span></div></div></div>
+   {presentation!=='calendar'&&<section className="overview" aria-label="收录概况"><div><span>已收录作品</span><strong>{items.length.toLocaleString()}<small>部</small></strong></div><div><span>有更新安排</span><strong>{scheduled.length}<small>部</small></strong></div><div><span>可用平台</span><strong>{SUPPORTED_PLATFORMS.length.toString().padStart(2,'0')}<small>个</small></strong></div><div className="overview-last"><TvMinimal size={23}/><p>只记录更新信息<small>观看体验，留给官方平台</small></p></div></section>}
    <section id="catalog" className="catalog-section">
-    <Tabs value={view} onValueChange={v=>{setView(v);setPage(1);setDay(-1)}}>
-     <div className="section-bar"><TabsList className="view-tabs" variant="line"><TabsTrigger value="all"><Layers3 size={17}/>国漫合集</TabsTrigger><TabsTrigger value="week"><CalendarDays size={17}/>本周更新</TabsTrigger></TabsList><button className="sync-button" onClick={syncCalendar} disabled={refresh}><RefreshCw size={14} className={refresh?'spinning':''}/>{refresh?'同步中':'同步日历'}</button></div>
-     <div className="platform-row" aria-label="筛选平台"><button className={platform==='all'?'platform active':'platform'} onClick={()=>{setPlatform('all');setPage(1)}}>全部平台<span>{items.length}</span></button>{Object.entries(platforms).map(([key,p])=><button key={key} disabled={!isSupportedPlatform(key)} title={isSupportedPlatform(key)?undefined:'暂不支持该平台'} className={`${platform===key?'platform active':'platform'} ${isSupportedPlatform(key)?'':'unsupported-platform'}`} onClick={()=>{setPlatform(key);setPage(1)}}><i style={{color:p.color,background:p.color+'18'}}>{p.letter}</i>{p.name}<span>{counts[key]}</span></button>)}</div>
-     {view==='week'&&<div className="week-row"><button className={day===-1?'selected':''} onClick={()=>{setDay(-1);setPage(1)}}>全周</button>{[1,2,3,4,5,6,0].map(d=><button key={d} className={day===d?'selected':''} onClick={()=>{setDay(d);setPage(1)}}>{dayNames[d]}{today===d&&<small>今天</small>}</button>)}</div>}
+    <Tabs value={view} onValueChange={v=>{setView(v);setPage(1);setDay(null)}}>
+     <div className="section-bar">{presentation==='calendar'?<div className="calendar-week-label"><CalendarDays size={17}/>{calendarWeek[0].date} — {calendarWeek[6].date}<span>北京时间</span></div>:<TabsList className="view-tabs" variant="line"><TabsTrigger value="all"><Layers3 size={17}/>国漫合集</TabsTrigger><TabsTrigger value="week"><CalendarDays size={17}/>本周更新</TabsTrigger></TabsList>}<OperationButton className="sync-button" onClick={syncCalendar} busy={refresh} aria-busy={refresh}><RefreshCw size={14} className={refresh?'spinning':''}/>{refresh?'同步中':'同步日历'}</OperationButton></div>
+     <div className="platform-row" aria-label="筛选平台"><button className={platform==='all'?'platform active':'platform'} onClick={()=>{setPlatform('all');setPage(1)}}>全部平台<span>{scopedItems.length}</span></button>{Object.entries(platforms).map(([key,p])=><button key={key} disabled={!isSupportedPlatform(key)} title={isSupportedPlatform(key)?undefined:'暂不支持该平台'} className={`${platform===key?'platform active':'platform'} ${isSupportedPlatform(key)?'':'unsupported-platform'}`} onClick={()=>{setPlatform(key);setPage(1)}}><i style={{color:p.color,background:p.color+'18'}}>{p.letter}</i>{p.name}<span>{counts[key]}</span></button>)}</div>
+     {view==='week'&&<div className="week-row"><button className={selectedDay===-1?'selected':''} onClick={()=>{setDay(-1);setPage(1)}}>全周</button>{[1,2,3,4,5,6,0].map(d=><button key={d} className={selectedDay===d?'selected':''} onClick={()=>{setDay(d);setPage(1)}}>{dayNames[d]}{today===d&&<small>今天</small>}</button>)}</div>}
      <div className="filter-row"><label className="search-box"><Search size={18}/><input value={query} onChange={e=>{setQuery(e.target.value);setPage(1)}} placeholder="搜索国漫名称…" aria-label="搜索国漫名称"/>{query&&<button aria-label="清除搜索" onClick={()=>{setQuery('');setPage(1)}}><X size={16}/></button>}</label><Select value={status} onValueChange={v=>{setStatus(v);setPage(1)}}><SelectTrigger className="status-select" aria-label="作品状态"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="all">全部状态</SelectItem><SelectItem value="ongoing">连载中</SelectItem><SelectItem value="finished">已完结</SelectItem><SelectItem value="unknown">状态待核验</SelectItem></SelectContent></Select><span className="result-count">共 {filtered.length} 部</span></div>
      <p className="live-note" role="status">{note||'收录与排期以官方页面为准'}</p>
-     {['all','week'].map(v=><TabsContent value={v} key={v}><div className="anime-grid">{visible.map(a=>{const p=platforms[a.platform];const next=upcoming(a,t);const isToday=next&&chinaDate(next)===chinaDate(t);return <article key={a.id} className="anime-card"><a href={a.url} target="_blank" rel="noopener noreferrer" className="cover-link" aria-label={`前往${p.name}观看${a.title}`}><div className="cover"><img src={a.cover} alt={a.title+'官方封面'} loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/><span className="cover-fallback">{a.title}</span><span className="platform-badge" style={{color:p.color}}>{p.name}</span><span className="episode-label">{a.episodes||'前往平台查看'}</span><span className="cover-play"><Play fill="currentColor" size={21}/></span></div></a><div className="card-body"><h2 title={a.title}>{a.title}</h2><div title={scheduleText(a,t)} className={'schedule '+(isToday?'today':'')}><Clock3 size={14}/><span>{scheduleText(a,t)}</span>{isToday&&<b>今日</b>}</div><div className="card-bottom"><a href={a.url} target="_blank" rel="noopener noreferrer">官方播放<ExternalLink size={13}/></a><span>{a.status==='finished'?'已完结':a.status==='ongoing'?'连载中':'状态待核验'}</span></div></div>{onFollow&&<button className="follow-button" disabled={followed.includes(a.id)} onClick={()=>onFollow(a)}>{followed.includes(a.id)?"已追番":"＋ 加入追番"}</button>}</article>})}</div>{!visible.length&&<div className="empty-state"><Search size={30}/><h2>{platform!=='all'&&counts[platform]===0?'该平台作品正在补充':'没有找到符合条件的国漫'}</h2><p>可以查看平台官方目录，或调整筛选条件。</p><button onClick={reset}>清除筛选</button>{platform!=='all'&&<a href={platforms[platform].home} target="_blank" rel="noopener noreferrer">访问{platforms[platform].name}官方目录<ExternalLink size={14}/></a>}</div>}</TabsContent>)}
+     {(presentation==='calendar'?['week']:['all','week']).map(v=><TabsContent value={v} key={v}><div className="anime-grid">{visible.map(a=>{const p=platforms[a.platform];const next=upcoming(a,t);const isToday=next&&chinaDate(next)===chinaDate(t);return <article key={a.id} className="anime-card"><a href={a.url} target="_blank" rel="noopener noreferrer" className="cover-link" aria-label={`前往${p.name}观看${a.title}`}><div className="cover"><img src={a.cover} alt={a.title+'官方封面'} loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/><span className="cover-fallback">{a.title}</span><span className="platform-badge" style={{color:p.color}}>{p.name}</span><span className="episode-label">{a.episodes||'前往平台查看'}</span><span className="cover-play"><Play fill="currentColor" size={21}/></span></div></a><div className="card-body"><h2 title={a.title}>{a.title}</h2><div title={scheduleText(a,t)} className={'schedule '+(isToday?'today':'')}><Clock3 size={14}/><span>{scheduleText(a,t)}</span>{isToday&&<b>今日</b>}</div><div className="card-bottom"><a href={a.url} target="_blank" rel="noopener noreferrer">官方播放<ExternalLink size={13}/></a><span>{a.status==='finished'?'已完结':a.status==='ongoing'?'连载中':'状态待核验'}</span></div></div>{onFollow&&presentation!=='calendar'&&<OperationButton className="follow-button" busy={followBusy} disabled={followBlocked||followed.includes(a.id)} aria-busy={pendingFollowId===a.id} onClick={()=>onFollow(a)}>{pendingFollowId===a.id?"正在加入…":followed.includes(a.id)?"已追番":"＋ 加入追番"}</OperationButton>}</article>})}</div>{!visible.length&&<div className="empty-state"><Search size={30}/><h2>{presentation==='calendar'?(!accountReady?'登录后查看你的新番周历':!followed.length?'还没有追番作品':'本周暂无符合条件的追番排期'):platform!=='all'&&counts[platform]===0?'该平台作品正在补充':'没有找到符合条件的国漫'}</h2><p>{presentation==='calendar'?'在国漫合集中加入追番，这里只展示你的本周更新。':'可以查看平台官方目录，或调整筛选条件。'}</p>{presentation==='calendar'&&!accountReady&&<button onClick={onLogin}>邮箱登录</button>}<button onClick={reset}>清除筛选</button>{platform!=='all'&&<a href={platforms[platform].home} target="_blank" rel="noopener noreferrer">访问{platforms[platform].name}官方目录<ExternalLink size={14}/></a>}</div>}</TabsContent>)}
     </Tabs>
     {pages>1&&<nav className="pagination" aria-label="作品分页"><button aria-label="上一页" disabled={previousPage===null} onClick={()=>setPage(previousPage ?? effectivePage)}><ChevronLeft size={17}/></button><span>第 {effectivePage} / {pages} 页</span><button aria-label="下一页" disabled={nextPage===null} onClick={()=>setPage(nextPage ?? effectivePage)}><ChevronRight size={17}/></button></nav>}
    </section>

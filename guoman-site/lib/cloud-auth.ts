@@ -118,7 +118,7 @@ export async function callAuthenticated<T>(
   expectedUserId?: string,
 ): Promise<T> {
   const session = await getAuthenticatedSession(auth);
-  if (!session) throw new Error("请先登录邮箱账号，再使用云端追番记录。");
+  if (!session) throw new CloudActionError("请先登录邮箱账号，再使用云端追番记录。", "UNAUTHENTICATED");
   if (expectedUserId && session.userId !== expectedUserId)
     throw new CloudActionError("账号会话已变化，请刷新并确认当前账号。", "ACCOUNT_CHANGED");
   const response = await invoke(action, payload);

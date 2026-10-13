@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Layers3, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Layers3, Play, X } from "lucide-react";
+import { platforms } from "@/lib/catalog";
 import type { WatchCandidate } from "@/lib/watching";
 import { validDeckSelection, visibleDeckIds } from "@/lib/recommendation-deck";
 import styles from "./recommendation-deck.module.css";
@@ -27,11 +28,13 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
   const ids = useMemo(() => candidates.map((candidate) => candidate.series.id), [candidates]);
   const [selectedId, setSelectedId] = useState(ids[0] || "");
   const [detailOpen, setDetailOpen] = useState(false);
+  const [drawingId, setDrawingId] = useState<string | null>(null);
   // A render-phase adjustment prevents a removed or caught-up candidate from
   // remaining selected while avoiding a stale-detail frame after props change.
   if (!ids.includes(selectedId) && selectedId !== (ids[0] || "")) {
     setSelectedId(ids[0] || "");
     setDetailOpen(false);
+    setDrawingId(null);
   }
   const stageRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -66,6 +69,14 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
       document.body.style.overflow = previousOverflow;
     };
   }, [modalOpen]);
+  useEffect(() => {
+    if (!drawingId || drawingId !== effectiveId) return;
+    const timer = window.setTimeout(() => {
+      setDetailOpen(true);
+      setDrawingId(null);
+    }, 430);
+    return () => window.clearTimeout(timer);
+  }, [drawingId, effectiveId]);
   const cards = windowIds.map((id, slot) => {
     const candidate = byId.get(id);
     if (!candidate) return null;
@@ -73,14 +84,14 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
     const windowCenter = (windowIds.length - 1) / 2;
     const offset = slot - windowCenter;
     const cardStyle = {
-      "--shift": `${offset * 96}px`,
+      "--shift": `${offset * 112}px`,
       "--shift-mobile": `${(slot - selectedSlot) * 44}px`,
       "--arc": `${Math.abs(offset) * 10}px`,
       "--arc-mobile": `${Math.abs(offset) * 6}px`,
       "--tilt": `${offset * 4}deg`,
       "--tilt-mobile": `${offset * 2.4}deg`,
-      "--lift": active ? "110px" : "0px",
-      "--lift-mobile": active ? "90px" : "0px",
+      "--lift": active ? "126px" : "0px",
+      "--lift-mobile": active ? "96px" : "0px",
       zIndex: slot * 10 + (active ? 5 : 0),
     } as CSSProperties;
     return (
@@ -88,9 +99,10 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
         key={id}
         ref={(node) => { if (node) cardRefs.current.set(id, node); else cardRefs.current.delete(id); }}
         type="button"
-        className={`${styles.card} ${active ? styles.active : ""}`}
+        className={`${styles.card} ${active ? styles.active : ""} ${drawingId === id ? styles.drawing : ""}`}
         data-tone={ids.indexOf(id) % 5}
         style={cardStyle}
+        aria-busy={drawingId === id}
         aria-label={`${candidate.series.title}，还有 ${candidate.unwatched} 集未看${active ? "，当前选中，再次激活查看详情" : "，激活后选中"}`}
         aria-pressed={active}
         onClick={() => select(id)}
@@ -99,22 +111,29 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
         {candidate.series.cover && <img key={candidate.series.cover} className={styles.poster} src={candidate.series.cover} alt="" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = "none"; }} />}
         <span className={styles.shade} aria-hidden="true" />
         <span className={styles.cardTop}>
-          <span className={styles.cardStatus}>{active ? "当前选中" : "有未看内容"}</span>
-          <span className={styles.cardNumber}>{String(ids.indexOf(id) + 1).padStart(2, "0")}</span>
+          <span className={styles.cardStatus}>{active ? "待抽取" : candidate.series.metadataPending ? "待核验" : candidate.series.status === "finished" ? "已完结" : candidate.series.status === "ongoing" ? "连载中" : "状态待核验"}</span>
+          <span className={styles.cardNumber}>#{String(ids.indexOf(id) + 1).padStart(2, "0")}</span>
         </span>
         <span className={styles.cardBottom}>
-          <span className={styles.unwatched}>还有 {candidate.unwatched} 集未看</span>
+          <span className={styles.unwatched}>{platforms[candidate.series.platform]?.name || "官方平台"} · {candidate.unwatched} 集未看</span>
           <strong>{candidate.series.title}</strong>
-          <span className={styles.cardProgress}>从第 {candidate.nextEpisode} 集继续</span>
-          <span className={styles.cardCue}>{active ? "再次点击查看详情" : "点击选中"}</span>
+          <span className={styles.cardProgress}>从第 {candidate.nextEpisode} 集继续 · 已核验至 {candidate.latestEpisode} 集</span>
+          <span className={styles.cardCue}>{active ? "再次点击抽取详情" : "点击选中卡牌"}</span>
         </span>
       </button>
     );
   });
 
+  function drawCurrent() {
+    if (drawingId || modalOpen) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) setDetailOpen(true);
+    else setDrawingId(effectiveId);
+  }
+
   function select(id: string) {
+    if (drawingId) return;
     if (id === effectiveId) {
-      setDetailOpen(true);
+      drawCurrent();
       return;
     }
     dialogRef.current?.close();
@@ -123,6 +142,7 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
   }
 
   function move(direction: -1 | 1) {
+    if (drawingId) return;
     const next = ids[selectedIndex + direction];
     if (!next) return;
     setSelectedId(next);
@@ -134,6 +154,7 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
   function closeDetails(returnFocus = true) {
     if (dialogRef.current?.open) dialogRef.current.close();
     setDetailOpen(false);
+    setDrawingId(null);
     if (returnFocus) cardRefs.current.get(effectiveId)?.focus();
   }
 
@@ -143,10 +164,14 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
   }
 
   function onDeckKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.target instanceof HTMLElement && event.target.closest("dialog")) return;
     if (!stageRef.current?.contains(event.target as Node)) return;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
       move(event.key === "ArrowLeft" ? -1 : 1);
+    } else if ((event.key === "Enter" || event.key === " ") && event.target === stageRef.current) {
+      event.preventDefault();
+      drawCurrent();
     }
   }
 
@@ -156,25 +181,25 @@ export default function RecommendationDeck({ candidates, renderDetails }: Props)
     <section className={styles.root} aria-label="未看追番推荐" onKeyDown={onDeckKeyDown}>
       <div className={styles.heading}>
         <div className={styles.headingMain}>
-          <span className={styles.deckMark}><Layers3 size={15} /> 追番卡组</span>
+          <span className={styles.deckMark}><span /> CARD DECK</span>
           <div>
-            <h2>现在，从哪一部继续？</h2>
-            <p>按追番优先级排列 · 共 {ids.length} 部有未看内容</p>
+            <h1>追番扑克牌夹 <span>共 {ids.length} 部</span></h1>
+            <p>要看什么 · 按你的追番优先级推荐</p>
           </div>
         </div>
-        <p className={styles.hint}>点击切换卡片，再点当前卡片查看详情</p>
+        <p className={styles.hint}>点击卡牌切为待抽 · 再次点击翻转抽取详情</p>
       </div>
-      <div className={styles.stage} ref={stageRef} aria-label="推荐卡片，左右方向键切换">
+      <div className={styles.stage} ref={stageRef} tabIndex={0} aria-label="推荐卡片，左右方向键切换，回车或空格抽取详情">
         <div className={styles.cards}>
           {cards}
         </div>
       </div>
       <div className={styles.toolbar}>
-        <span className={styles.position} aria-live="polite">{selected.series.title} · {selectedIndex + 1} / {ids.length}</span>
+        <div className={styles.keyboardHint}><span><kbd>←</kbd> <kbd>→</kbd> 切换牌位</span><span><kbd>Space</kbd> / <kbd>Enter</kbd> 抽取详情</span><span className={styles.position}>{selectedIndex + 1} / {ids.length}</span></div>
         <div className={styles.controls}>
-          <button type="button" aria-label="上一部追番" onClick={() => move(-1)} disabled={selectedIndex <= 0}><ChevronLeft size={20} /></button>
-          <button type="button" aria-label="查看当前卡片详情" onClick={() => setDetailOpen(true)}>查看详情</button>
-          <button type="button" aria-label="下一部追番" onClick={() => move(1)} disabled={selectedIndex >= ids.length - 1}><ChevronRight size={20} /></button>
+          <button type="button" aria-label="上一部追番" onClick={() => move(-1)} disabled={!!drawingId || selectedIndex <= 0}><ChevronLeft size={20} /></button>
+          <button type="button" aria-label="查看当前卡片详情" onClick={drawCurrent} disabled={!!drawingId}><Play size={13} fill="currentColor"/>{drawingId ? "正在抽取" : "抽取此牌详情"}</button>
+          <button type="button" aria-label="下一部追番" onClick={() => move(1)} disabled={!!drawingId || selectedIndex >= ids.length - 1}><ChevronRight size={20} /></button>
         </div>
       </div>
       <dialog

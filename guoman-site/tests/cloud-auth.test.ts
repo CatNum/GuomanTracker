@@ -6,6 +6,7 @@ import {
   sendEmailCode,
   verifyEmailCode,
   callAuthenticated,
+  CloudActionError,
   emailErrorMessage,
   emailRetryDelayMs,
 } from "../lib/cloud-auth.ts";
@@ -199,4 +200,14 @@ test("SDK 验证回调返回错误但已持久化会话时仍标记待恢复", a
     "123456", () => { accepted = true; },
   ), /late failure/);
   assert.equal(accepted, true);
+});
+
+
+test('confirmed session loss is distinguishable from uncertain SDK network failure during recovery', async () => {
+  await assert.rejects(() => callAuthenticated({ getSession: async () => ({ data: { session: null }, error: null }) },
+    async () => { throw new Error('must not call server'); }, 'library', {}, 'alice'),
+    error => error instanceof CloudActionError && error.code === 'UNAUTHENTICATED');
+  await assert.rejects(() => callAuthenticated({ getSession: async () => { throw new Error('offline'); } },
+    async () => { throw new Error('must not call server'); }, 'library', {}, 'alice'),
+    error => !(error instanceof CloudActionError));
 });
