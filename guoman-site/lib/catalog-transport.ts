@@ -16,6 +16,22 @@ const animeSchema = z.object({
 const catalogPageSchema = z.object({ items: z.array(animeSchema).max(200), nextAfter: z.string().max(256) });
 export type CatalogData = { items: z.infer<typeof animeSchema>[] };
 
+/** fetchCatalogPage（读取公共HTTP目录分页）：不发送账号凭据，不缓存数据库结果。 */
+export async function fetchCatalogPage(endpoint: string, action: string, payload: Record<string, unknown>,
+  fetcher: (url: string, options: RequestInit) => Promise<Response> = fetch): Promise<unknown> {
+  if (action !== 'getCatalog') throw new Error('不支持的目录动作。');
+  if (!endpoint || new URL(endpoint).protocol !== 'https:') throw new Error('目录读取失败，请检查公共目录地址。');
+  const response = await fetcher(endpoint, { method: 'POST', credentials: 'omit', cache: 'no-store',
+    redirect: 'error', signal: AbortSignal.timeout(30_000), headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, payload }) });
+  if (!response.ok) throw new Error('目录读取失败，请稍后重试。');
+  let value;
+  try { value = await response.json(); } catch { throw new Error('目录读取失败，请稍后重试。'); }
+  const envelope = z.object({ ok: z.literal(true), data: z.unknown() }).safeParse(value);
+  if (!envelope.success || !Object.hasOwn(envelope.data, 'data')) throw new Error('目录读取失败，请稍后重试。');
+  return envelope.data.data;
+}
+
 /** loadCatalogData（读取PG目录）：游客与账号使用相同分页入口，全部确认后才返回。 */
 export async function loadCatalogData({ call }: {
   call: (action: string, payload: Record<string, unknown>) => Promise<unknown>;

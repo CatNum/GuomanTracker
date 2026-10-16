@@ -1,5 +1,6 @@
 "use client";
 import { consumeOAuthState } from "./oauth-state";
+import { fetchCatalogPage } from "./catalog-transport";
 import { callAuthenticated, getAuthenticatedSession as readSession, sendEmailCode as sendCode, type EmailAuth } from "./cloud-auth";
 
 const env = process.env.NEXT_PUBLIC_CLOUDBASE_ENV_ID;
@@ -88,13 +89,5 @@ export async function finishWechatLogin(search: string) {
 
 /** callPublicCatalog（读取公共PG目录）：不创建匿名账号，不访问个人函数。 */
 export async function callPublicCatalog(action: string, payload: Record<string, unknown>) {
-  if (action !== 'getCatalog') throw new Error('不支持的目录动作。');
-  const app = await cloudApp();
-  // SDK初始化认证模块后才会将可发布密钥作为游客访问凭据，不创建匿名账号。
-  app.auth();
-  const response = await app.callFunction({ name: 'guoman-catalog', data: { action, payload } });
-  const value = typeof response.result === 'string' ? JSON.parse(response.result) : response.result;
-  if (!value || typeof value !== 'object' || typeof value.ok !== 'boolean') throw new Error('目录响应无效。');
-  if (!value.ok) throw new Error('目录读取失败，请稍后重试。');
-  return value.data as unknown;
+  return fetchCatalogPage(process.env.NEXT_PUBLIC_CATALOG_URL || '', action, payload);
 }

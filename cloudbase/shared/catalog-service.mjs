@@ -29,3 +29,25 @@ export function createCatalogHandler({ createStore }) {
     }
   };
 }
+
+/** createCatalogHttpHandler（公共HTTP目录入口）：校验固定路径和请求体后复用只读服务。 */
+export function createCatalogHttpHandler(options) {
+  const read = createCatalogHandler(options);
+  const headers = { 'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
+  const reply = (statusCode, value) => ({ statusCode, headers,
+    body: value === undefined ? '' : JSON.stringify(value) });
+  const invalid = () => reply(400, { ok: false, error: { code: 'INVALID_REQUEST', message: '目录请求格式无效。' } });
+  return async (event) => {
+    // 默认网关可剥去触发前缀；OPA仍限定外部完整路径为/api/catalog。
+    if (!['/api/catalog', '/'].includes(event?.path)) return reply(404, { ok: false });
+    if (event.httpMethod === 'OPTIONS') return reply(204);
+    if (event.httpMethod !== 'POST') return reply(405, { ok: false });
+    if (event.isBase64Encoded || typeof event.body !== 'string' || Buffer.byteLength(event.body, 'utf8') > 4096) return invalid();
+    let body;
+    try { body = JSON.parse(event.body); } catch { return invalid(); }
+    const value = await read(body);
+    return reply(value.ok ? 200 : value.error.code === 'INVALID_REQUEST' ? 400 : 503, value);
+  };
+}

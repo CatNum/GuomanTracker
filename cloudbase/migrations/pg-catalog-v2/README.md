@@ -39,20 +39,20 @@ node cloudbase/scripts/import-pg-catalog.mjs --input=/private/path/catalog-backu
 
 ## 二、公开目录授权
 
-PG 环境使用 OPA 授权，`function-rules.json`（函数权限模板）不会自动生效。
-当前游客请求到达目录函数前被网关以 403 拒绝，管理端函数调用已确认 PG 查询成功。
-待授权的 [目录访问策略](../../catalog-access.rego) 仅匹配本环境的
-`POST /v1/functions/guoman-catalog`（公开目录调用路径），未设置全局默认或拒绝规则。
+PG 环境使用 OPA 授权，`function-rules.json`（旧函数权限模板）不会自动生效。
+实际 SDK 游客调用即使 OPA 放行仍返回 403，当前公共目录使用同一函数的 HTTP 网关入口。
+[目录访问策略](../../catalog-access.rego) 与 [目录路由请求](../../catalog-route.json)
+记录实际配置；后者用于 `CreateCloudBaseGWAPI`（创建默认网关路径），
+不是新域名管理 API 的请求体。现有路由已创建，不得盲目重复执行。
 
-根据 [CloudBase OPA 决策矩阵](https://docs.cloudbase.net/envconfig/authz-opa/intro)，
-用户允许规则未命中时沿用平台默认策略；
-[策略管理说明](https://docs.cloudbase.net/en/cli-v1/policy/management)
-也明确指出保存用户策略后旧网关鉴权会失效。
-因此必须核对并备份既有策略，明确授权后应用，
-再用真实游客会话检查目录读取和个人入口拒绝，不能仅靠模板宣称已开放。
+前端构建需要 `NEXT_PUBLIC_CATALOG_URL`（公开目录 HTTPS 地址），路径为 `/api/catalog`。
+请求不携带账号凭据；目录函数限定公开字段、有限分页、请求体和读取动作。
+允许规则未命中时沿用平台策略，函数本身继续拒绝错误路径、方法与写动作。
 
-本轮两次策略写入被自动审批拒绝，均未执行，当前等待用户单独授权。
-公开目录验证通过前，不切换线上网页或个人函数。
+2026-10-16 已部署目录适配、个人函数及静态页面；真实游客 17 页读取
+3,247 个节目，正式域名显示相同数量。发布和剩余验收边界见
+[发布记录](../../../docs/02.%20ARCHITECTURE/PG目录统一发布记录.md)。
+数据库迁移已经完成，恢复时勿重复导入或清理原记录。
 
 ## 三、后续资料写入
 
