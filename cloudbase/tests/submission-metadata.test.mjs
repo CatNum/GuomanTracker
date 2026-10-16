@@ -152,6 +152,29 @@ test('sanitizes unknown fetch errors and does not expose error text or stack', a
   assert.equal(JSON.stringify(report).includes('secret'), false);
 });
 
+test('reports a body read abort as a fetch timeout and preserves the original error', async () => {
+  const reports = [];
+  const original = Object.assign(new Error('private body detail'), { name: 'AbortError' });
+  const body = new ReadableStream({ start(controller) { controller.error(original); } });
+  await assert.rejects(resolveOfficialMetadata({ url: 'https://v.qq.com/x/cover/abc123.html', platform: 'tencent' }, {
+    reportFailure: (report) => reports.push(report),
+    fetcher: async () => new Response(body, { headers: { 'content-type': 'text/html' } }),
+  }), (error) => error === original);
+  assert.deepEqual(reports, [{ event: 'guoman.metadata.failure', platform: 'tencent', stage: 'fetch', code: 'TIMEOUT' }]);
+});
+
+test('reports an ordinary body read failure as a network error and preserves the original error', async () => {
+  const reports = [];
+  const original = Object.assign(new Error('secret response stream failure'), { code: 'SENSITIVE_CODE' });
+  const body = new ReadableStream({ start(controller) { controller.error(original); } });
+  await assert.rejects(resolveOfficialMetadata({ url: 'https://v.qq.com/x/cover/abc123.html', platform: 'tencent' }, {
+    reportFailure: (report) => reports.push(report),
+    fetcher: async () => new Response(body, { headers: { 'content-type': 'text/html' } }),
+  }), (error) => error === original);
+  assert.deepEqual(reports, [{ event: 'guoman.metadata.failure', platform: 'tencent', stage: 'fetch', code: 'NETWORK_ERROR' }]);
+  assert.equal(JSON.stringify(reports).includes('secret'), false);
+});
+
 test('a diagnostic callback failure does not replace the original resolver error', async () => {
   const original = Object.assign(new Error('offline'), { code: 'NETWORK_ERROR' });
   await assert.rejects(resolveOfficialMetadata({ url: 'https://v.qq.com/x/cover/abc123.html', platform: 'tencent' }, {

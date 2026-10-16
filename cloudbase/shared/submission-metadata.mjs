@@ -109,12 +109,12 @@ function makeResult(titleValue, coverValue) {
   return result;
 }
 
-async function readOfficial(normalized, options) {
+async function readOfficial(normalized, { readMetadata }) {
   if (normalized.platform === 'bilibili') {
     const id = normalized.url.match(/\/(ss|ep)([1-9]\d*)$/u);
     const parameter = id[1] === 'ss' ? 'season_id' : 'ep_id';
     const url = `https://api.bilibili.com/pgc/view/web/season?${parameter}=${id[2]}`;
-    const { text } = await fetchMetadata(url, { ...options, platform: 'bilibili' });
+    const { text } = await readMetadata(url, { platform: 'bilibili' });
     let payload;
     try { payload = JSON.parse(text); } catch { throw fault('INVALID_JSON', '官方标题数据无法解析。'); }
     const item = payload?.code === 0 ? payload.result : undefined;
@@ -122,7 +122,7 @@ async function readOfficial(normalized, options) {
     return makeResult(item.title, item.cover);
   }
 
-  const { text } = await fetchMetadata(normalized.url, { ...options, platform: normalized.platform });
+  const { text } = await readMetadata(normalized.url, { platform: normalized.platform });
   const metadata = extractTitleMeta(text);
   const title = metadata.title ?? extractElementTitle(text);
   // Check the raw candidate too, so a failed auth/challenge meta tag cannot be bypassed by <title>.
@@ -137,14 +137,14 @@ async function readOfficial(normalized, options) {
 export async function resolveOfficialMetadata(official, { fetcher = fetch, timeoutMs = 5000, maxBytes = 2 * 1024 * 1024, reportFailure = report => console.warn(report.event, report) } = {}) {
   const normalized = checkedOfficial(official);
   const fetchErrors = new WeakSet();
-  const safeFetcher = async (...args) => {
-    try { return await fetcher(...args); } catch (error) {
+  const readMetadata = async (url, { platform }) => {
+    try { return await fetchMetadata(url, { fetcher, timeoutMs, maxBytes, platform }); } catch (error) {
       if (error && (typeof error === 'object' || typeof error === 'function')) fetchErrors.add(error);
       throw error;
     }
   };
   try {
-    return await readOfficial(normalized, { fetcher: safeFetcher, timeoutMs, maxBytes });
+    return await readOfficial(normalized, { readMetadata });
   } catch (error) {
     if (error?.code !== 'INVALID_URL') reportMetadataFailure(reportFailure, normalized, error, fetchErrors);
     throw error;
