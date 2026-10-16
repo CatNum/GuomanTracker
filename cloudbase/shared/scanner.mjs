@@ -41,7 +41,12 @@ export async function fetchMetadata(input, { fetcher = fetch, timeoutMs = 8000, 
         url = permittedFetchUrl(new URL(location, url).href, chosenPlatform);
         continue;
       }
-      if (!response.ok) { await response.body?.cancel(); throw fault('HTTP_ERROR', `官网返回 HTTP ${response.status}。`); }
+      if (!response.ok) {
+        await response.body?.cancel();
+        const error = fault('HTTP_ERROR', `官网返回 HTTP ${response.status}。`);
+        if (Number.isInteger(response.status) && response.status >= 100 && response.status <= 599) error.status = response.status;
+        throw error;
+      }
       const type = (response.headers.get('content-type') || '').toLowerCase();
       if (!/^(?:application\/(?:json|[^;]+\+json)|text\/(?:html|plain))(?:;|$)/u.test(type)) {
         await response.body?.cancel(); throw fault('INVALID_CONTENT', '扫描仅接受官网文本或 JSON 元数据。');

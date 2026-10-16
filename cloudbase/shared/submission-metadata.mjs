@@ -4,6 +4,18 @@ import { fetchMetadata } from './scanner.mjs';
 
 const MAX_TITLE_LENGTH = 120;
 const TITLE_ELEMENT_LIMIT = 4096;
+const FETCH_FAILURE_CODES = new Set(['HTTP_ERROR', 'REDIRECT_LIMIT', 'INVALID_CONTENT', 'BODY_TOO_LARGE', 'EMPTY_RESPONSE', 'INVALID_URL']);
+const PARSE_FAILURE_CODES = new Set(['INVALID_JSON', 'UNSUPPORTED']);
+const FAILURE_CODES = new Set([...FETCH_FAILURE_CODES, ...PARSE_FAILURE_CODES, 'TIMEOUT', 'NETWORK_ERROR', 'UNKNOWN_ERROR']);
+
+function reportMetadataFailure(reportFailure, normalized, error, fetchErrors) {
+  const originalCode = typeof error?.code === 'string' && FAILURE_CODES.has(error.code) ? error.code : undefined;
+  const code = error?.name === 'AbortError' ? 'TIMEOUT' : originalCode || (fetchErrors.has(error) ? 'NETWORK_ERROR' : 'UNKNOWN_ERROR');
+  const stage = PARSE_FAILURE_CODES.has(code) ? 'parse' : FETCH_FAILURE_CODES.has(code) || fetchErrors.has(error) ? 'fetch' : 'resolve';
+  const report = { event: 'guoman.metadata.failure', platform: normalized.platform, stage, code };
+  if (code === 'HTTP_ERROR' && Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599) report.status = error.status;
+  try { reportFailure(report); } catch { /* Diagnostics must not replace the original resolver failure. */ }
+}
 
 function fault(code, message) {
   const error = new Error(message);
@@ -122,7 +134,19 @@ async function readOfficial(normalized, options) {
 }
 
 /** Reads only a verified official title and optional HTTPS cover for link-only submissions. */
-export async function resolveOfficialMetadata(official, { fetcher = fetch, timeoutMs = 5000, maxBytes = 2 * 1024 * 1024 } = {}) {
+export async function resolveOfficialMetadata(official, { fetcher = fetch, timeoutMs = 5000, maxBytes = 2 * 1024 * 1024, reportFailure = report => console.warn(report.event, report) } = {}) {
   const normalized = checkedOfficial(official);
-  return readOfficial(normalized, { fetcher, timeoutMs, maxBytes });
+  const fetchErrors = new WeakSet();
+  const safeFetcher = async (...args) => {
+    try { return await fetcher(...args); } catch (error) {
+      if (error && (typeof error === 'object' || typeof error === 'function')) fetchErrors.add(error);
+      throw error;
+    }
+  };
+  try {
+    return await readOfficial(normalized, { fetcher: safeFetcher, timeoutMs, maxBytes });
+  } catch (error) {
+    if (error?.code !== 'INVALID_URL') reportMetadataFailure(reportFailure, normalized, error, fetchErrors);
+    throw error;
+  }
 }
