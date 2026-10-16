@@ -175,6 +175,25 @@ test('reports an ordinary body read failure as a network error and preserves the
   assert.equal(JSON.stringify(reports).includes('secret'), false);
 });
 
+test('default diagnostics write one searchable JSON warning without sensitive fields', async () => {
+  const originalWarn = console.warn;
+  const calls = [];
+  console.warn = (...args) => calls.push(args);
+  try {
+    await assert.rejects(resolveOfficialMetadata({ url: 'https://v.qq.com/x/cover/abc123.html', platform: 'tencent' }, {
+      fetcher: async () => { throw new Error('secret title account token'); },
+    }));
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].length, 1);
+  assert.deepEqual(JSON.parse(calls[0][0]), {
+    event: 'guoman.metadata.failure', platform: 'tencent', stage: 'fetch', code: 'NETWORK_ERROR',
+  });
+  assert.equal(calls[0][0].includes('secret'), false);
+});
+
 test('a diagnostic callback failure does not replace the original resolver error', async () => {
   const original = Object.assign(new Error('offline'), { code: 'NETWORK_ERROR' });
   await assert.rejects(resolveOfficialMetadata({ url: 'https://v.qq.com/x/cover/abc123.html', platform: 'tencent' }, {

@@ -134,7 +134,7 @@ async function readOfficial(normalized, { readMetadata }) {
 }
 
 /** Reads only a verified official title and optional HTTPS cover for link-only submissions. */
-export async function resolveOfficialMetadata(official, { fetcher = fetch, timeoutMs = 5000, maxBytes = 2 * 1024 * 1024, reportFailure = report => console.warn(report.event, report) } = {}) {
+export async function resolveOfficialMetadata(official, { fetcher = fetch, timeoutMs = 5000, maxBytes = 2 * 1024 * 1024, reportFailure = report => console.warn(JSON.stringify(report)) } = {}) {
   const normalized = checkedOfficial(official);
   const fetchErrors = new WeakSet();
   const readMetadata = async (url, { platform }) => {
