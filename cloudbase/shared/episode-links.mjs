@@ -1,7 +1,7 @@
 import { parseOfficialUrl } from './official-url.mjs';
 import { fetchMetadata } from './scanner.mjs';
+import { tencentPageRequest } from './tencent-page.mjs';
 
-const TENCENT_PAGE_API = 'https://pbaccess.video.qq.com/trpc.vector_layout.page_view.PageService/getPage?video_appid=3000010&vversion_platform=2&vversion_name=8.5.96';
 const EXTRAS = /预告|花絮|特辑|PV|CM|先导|敬请|即将|预约/iu;
 const videoId = (value) => typeof value === 'string' && /^[a-zA-Z0-9=+-]{6,128}$/u.test(value);
 function fault(code, message) { return Object.assign(new Error(message), { code }); }
@@ -61,12 +61,8 @@ function tencentLink(modules, cid, episode) {
   }));
 }
 async function tencentPage(params, options, context = {}) {
-  const secondary = params.page_type === 'detail_operation';
-  const { text } = await fetchMetadata(TENCENT_PAGE_API, { ...options, platform: 'tencent', maxRedirects: 0, method: 'POST', body: JSON.stringify({
-    page_params: { req_from: 'web_vsite', new_mark_label_enabled: '1', ...params },
-    page_bypass_params: { params: { caller_id: '3000010', platform_id: '2', ...(secondary ? { page_type: 'detail_operation', page_id: 'vsite_episode_list', data_mode: 'default', user_mode: 'default' } : {}) }, scene: secondary ? 'operation' : 'desk_detail', app_version: '' },
-    page_context: context,
-  }) });
+  const request = tencentPageRequest(params, context);
+  const { text } = await fetchMetadata(request.url, { ...options, ...request });
   return tencentModules(json(text));
 }
 

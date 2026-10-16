@@ -190,7 +190,7 @@ test('metadata resolution failure writes nothing and a later successful retry sa
 test('all supported platforms reject unrecognized official responses without writes', async (t) => {
   const cases = [
     ['bilibili', 'https://www.bilibili.com/bangumi/play/ss457', '{"code":-404}', 'application/json'],
-    ['tencent', 'https://v.qq.com/x/cover/mcv8hkc8zk8lnov/x0036x5qqsr.html', '<title>腾讯视频</title>', 'text/html'],
+    ['tencent', 'https://v.qq.com/x/cover/mcv8hkc8zk8lnov/x0036x5qqsr.html', '{"ret":0,"data":{"CardList":[]}}', 'application/json'],
     ['youku', 'https://v.youku.com/v_show/id_XMzEyMzQ1.html', '<title>优酷</title>', 'text/html'],
   ];
   for (const [platform, url, body, contentType] of cases) await t.test(platform, async () => {
@@ -208,7 +208,7 @@ test('all supported platforms reject unrecognized official responses without wri
 test('all supported platforms save only resolved official titles while episode verification stays separate', async (t) => {
   const cases = [
     ['bilibili', 'https://www.bilibili.com/bangumi/play/ss457', '{"code":0,"result":{"title":"官方国创","episodes":[]}}', 'application/json', '官方国创'],
-    ['tencent', 'https://v.qq.com/x/cover/mcv8hkc8zk8lnov.html', '<meta property="og:title" content="完美世界 - 腾讯视频">', 'text/html', '完美世界'],
+    ['tencent', 'https://v.qq.com/x/cover/mcv8hkc8zk8lnov.html', JSON.stringify({ ret: 0, data: { CardList: [{ type: 'pc_introduction', children_list: { 0: { cards: [{ params: { title: '完美世界', 'report.cid': 'mcv8hkc8zk8lnov' } }] } } }] } }), 'application/json', '完美世界'],
     ['youku', 'https://v.youku.com/v_show/id_XMzEyMzQ1.html', '<title>师兄啊师兄_优酷</title>', 'text/html', '师兄啊师兄'],
   ];
   for (const [platform, url, body, contentType, title] of cases) await t.test(platform, async () => {

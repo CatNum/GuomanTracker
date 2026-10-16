@@ -1,6 +1,7 @@
 import { normalizeOfficialUrl } from './official-links.mjs';
 import { isSupportedPlatform } from './platform-support.mjs';
 import { fetchMetadata } from './scanner.mjs';
+import { tencentPageRequest } from './tencent-page.mjs';
 
 const MAX_TITLE_LENGTH = 120;
 const TITLE_ELEMENT_LIMIT = 4096;
@@ -109,6 +110,31 @@ function makeResult(titleValue, coverValue) {
   return result;
 }
 
+function tencentCards(card) {
+  return Object.values(card?.children_list || {}).flatMap(group => Array.isArray(group?.cards) ? group.cards : []);
+}
+
+function tencentMetadata(payload, requestedCid, requestedVid) {
+  if (payload?.ret !== 0 || !Array.isArray(payload.data?.CardList)) throw fault('UNSUPPORTED', '官方页面没有返回可确认的节目标题。');
+  const modules = payload.data.CardList;
+  let cid = requestedCid;
+  if (!cid) {
+    const matchingCids = new Set(modules.filter(card => card?.type === 'pc_web_episode_list')
+      .flatMap(tencentCards)
+      .map(card => card?.params)
+      .filter(params => params?.vid === requestedVid && /^[a-zA-Z0-9]{3,64}$/u.test(params?.cid || ''))
+      .map(params => params.cid));
+    if (matchingCids.size !== 1) throw fault('UNSUPPORTED', '官方页面没有返回唯一匹配的节目。');
+    [cid] = matchingCids;
+  }
+  const matches = modules.filter(card => card?.type === 'pc_introduction')
+    .flatMap(tencentCards)
+    .map(card => card?.params)
+    .filter(params => params?.['report.cid'] === cid);
+  if (matches.length !== 1 || typeof matches[0].title !== 'string') throw fault('UNSUPPORTED', '官方页面没有返回唯一匹配的节目标题。');
+  return makeResult(matches[0].title, matches[0].new_pic_vt || matches[0].new_pic_hz);
+}
+
 async function readOfficial(normalized, { readMetadata }) {
   if (normalized.platform === 'bilibili') {
     const id = normalized.url.match(/\/(ss|ep)([1-9]\d*)$/u);
@@ -120,6 +146,17 @@ async function readOfficial(normalized, { readMetadata }) {
     const item = payload?.code === 0 ? payload.result : undefined;
     if (!item || typeof item.title !== 'string') throw fault('UNSUPPORTED', '官方页面没有返回可确认的节目标题。');
     return makeResult(item.title, item.cover);
+  }
+
+  if (normalized.platform === 'tencent') {
+    const url = new URL(normalized.url);
+    const cid = url.pathname.match(/^\/x\/cover\/([a-zA-Z0-9]{3,64})\.html$/u)?.[1] || '';
+    const vid = url.pathname.match(/^\/x\/page\/([a-zA-Z0-9]{3,64})\.html$/u)?.[1] || '';
+    const request = tencentPageRequest({ page_type: 'detail', page_id: 'detail', cid, vid });
+    const { text } = await readMetadata(request.url, request);
+    let payload;
+    try { payload = JSON.parse(text); } catch { throw fault('INVALID_JSON', '官方标题数据无法解析。'); }
+    return tencentMetadata(payload, cid, vid);
   }
 
   const { text } = await readMetadata(normalized.url, { platform: normalized.platform });
@@ -137,8 +174,8 @@ async function readOfficial(normalized, { readMetadata }) {
 export async function resolveOfficialMetadata(official, { fetcher = fetch, timeoutMs = 5000, maxBytes = 2 * 1024 * 1024, reportFailure = report => console.warn(JSON.stringify(report)) } = {}) {
   const normalized = checkedOfficial(official);
   const fetchErrors = new WeakSet();
-  const readMetadata = async (url, { platform }) => {
-    try { return await fetchMetadata(url, { fetcher, timeoutMs, maxBytes, platform }); } catch (error) {
+  const readMetadata = async (url, requestOptions) => {
+    try { return await fetchMetadata(url, { fetcher, timeoutMs, maxBytes, ...requestOptions }); } catch (error) {
       if (error && (typeof error === 'object' || typeof error === 'function')) fetchErrors.add(error);
       throw error;
     }
