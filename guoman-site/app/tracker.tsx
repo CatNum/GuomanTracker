@@ -744,17 +744,6 @@ export default function Tracker() {
                     <h1>{view === "draw" ? "要看什么" : "我的追番"}</h1>
                     <p>{view === "draw" ? "选中一张卡牌，再次点击抽取详情。" : "记住看到哪里，下次接着看。"}</p>
                   </div>
-                  {mode !== "guest" && (
-                    <OperationButton
-                      className="sync-button"
-                      busy={busy}
-                      aria-busy={pendingMutation?.action === "library"}
-                      onClick={() => void refreshLibrary()}
-                    >
-                      <RefreshCw size={14} />
-                      {pendingMutation?.action === "library" ? "刷新中…" : "刷新记录"}
-                    </OperationButton>
-                  )}
                 </div>
                 {mode === "guest" ? (
                   <section className="welcome-panel">
