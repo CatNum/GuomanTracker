@@ -91,6 +91,8 @@ Hosting 上传命令必须省略第二个远端路径参数，不能传 `/`。�
 
 `index.main`（云函数执行入口）采用 CommonJS 桥接 `entry.mjs`（业务模块），兼容 CloudBase Nodejs24.11。生产依赖随部署包上传，入口应位于压缩包最外层。
 
+CloudBase 只能在创建函数时指定 `runtime`（执行运行时），已有函数不支持原地修改；重新上传代码也可能恢复旧运行时。迁移已有函数时必须先备份配置与代码，再同名删除重建，并接受 FunctionId 变化和短暂不可用。不要使用 `tcb config update fn` 改动运行时，该命令会报告成功，但线上仍保持原版本。
+
 `cloudbaserc.json`（真实环境部署配置）已被 Git 忽略。模板不自动创建定时触发器，避免没有正确密钥时部署一个失效任务。服务器环境变量 `GUOMAN_SCAN_SECRET`（扫描调度密钥）从管理员环境读取，不能放入公开变量。
 
 依据：[CloudBase CLI 配置](https://docs.cloudbase.net/cli-v1/functions/configs)、[部署命令](https://docs.cloudbase.net/cli-v1/functions/deploy)、[CommonJS 与 ES Module 入口](https://docs.cloudbase.net/cloud-function/how-coding)。
