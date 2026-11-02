@@ -3,7 +3,7 @@
   "version": "0.2.2",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.11.0 <25"
   },
   "scripts": {
     "install:ci": "node scripts/install-ci.mjs",
@@ -48,7 +48,7 @@
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
     "@tailwindcss/postcss": "4.2.1",
-    "@types/node": "22.19.19",
+    "@types/node": "24.11.2",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",

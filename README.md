@@ -36,7 +36,7 @@
 
 ## 二、本地运行
 
-建议 Node.js 22.21.1；采集脚本需要 Python 3。
+建议 Node.js 24.11；采集脚本需要 Python 3。
 
 ```sh
 cd guoman-site
