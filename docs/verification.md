@@ -21,7 +21,7 @@
 - 新函数关闭云端依赖安装，代码包体积 16,466,874 字节；下载读回的源码、共享模块和包配置与部署产物一致，`@cloudbase/node-sdk` 与 `@cloudbase/manager-node` 均随包存在。
 - 无身份直接调用返回 `UNAUTHENTICATED`。真实 Chrome 登录页整页刷新后会话恢复，成功读取原账号 8 部追番及顺序和进度；本轮未修改追番、进度或优先级。
 - 最近 20 条错误日志为空。原函数代码、配置和重建后读回文件保存在 Git 忽略目录 `.cloudbase-backup/guoman-user-20261102-121832/`。
-- `guoman-catalog` 和 `guoman-scan` 未在这次迁移中部署，线上仍为 `Nodejs20.19`；`guoman-scan` 继续禁止部署。
+- `guoman-catalog` 未在这次迁移中处理，线上仍为 `Nodejs20.19`；`guoman-scan` 本来就没有线上函数，当前仍禁止部署。
 
 ## main 汇总发布（2026-10-13）
 
