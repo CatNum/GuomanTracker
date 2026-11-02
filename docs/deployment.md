@@ -78,18 +78,18 @@ cd ..
 # 首次配置时才从模板复制；不要覆盖已有且被 Git 忽略的真实配置：
 test -f cloudbaserc.json || cp cloudbaserc.example.json cloudbaserc.json
 # 核对本地 cloudbaserc.json 的目标环境，仅覆盖部署现有用户函数：
-tcb fn deploy guoman-user -e guoman-d1goxm3hhb53752a4 --force --install-dependency true
+tcb fn deploy guoman-user -e guoman-d1goxm3hhb53752a4 --force --install-dependency false
 # 仅将静态产物上传至既有共享域名根目录；省略远端路径参数，不要传 /，也不要 prune：
 tcb hosting deploy guoman-site/.cloudbase-static/out -e guoman-d1goxm3hhb53752a4 --safe --verify
 ```
 
 Hosting 上传命令必须省略第二个远端路径参数，不能传 `/`。当前使用的 CloudBase CLI 3.8.6 对 manifest 中的前导斜线路径存在缺陷，会导致 `--safe --verify` 校验失败并回滚。不要使用 `--prune` 或清空托管目录；应用包不得覆盖既有 `__auth/**` 认证系统文件或 `cloud-admin/index.html` 管理页。上传到既有共享域名，不创建新域名或购买升级套餐。默认域名用于开发测试，长期自定义域名需另行配置。
 
-`cloudbase:prepare`（云函数打包命令）生成忽略目录 `.cloudbase-deploy`，将独立函数入口、锁定依赖、共享模块和用户函数所需目录快照打包，并检查相对导入。不要直接上传源码函数目录，它的开发导入路径依赖仓库共享目录。
+`cloudbase:prepare`（云函数打包命令）生成忽略目录 `.cloudbase-deploy`，将独立函数入口、生产依赖、共享模块和用户函数所需目录快照打包，并检查相对导入。Node.js 22 及以上的 CloudBase 运行时不能云端安装依赖，因此打包命令会在部署目录执行生产依赖安装，上传时必须关闭云端依赖安装。不要直接上传源码函数目录，它的开发导入路径依赖仓库共享目录。
 
 `--force`（覆盖现有同名函数）仅用于已审核的 `guoman-user` 单函数代码；不要使用 `--all`（部署配置中的全部函数），也不要部署 `guoman-scan`。历史版本已通过真实邮箱基本读写验收；本次更新验证了登录、原记录读取、目录同步与刷新恢复，未执行写操作。部署命令本身不能证明跨账号隔离。扫描器尚未接入同一 PG 事务协议，当前不得部署或启用定时调度。部署命令使用本地忽略配置，禁止把环境凭证复制进仓库或终端输出。
 
-`index.main`（云函数执行入口）采用 CommonJS 桥接 `entry.mjs`（业务模块），兼容 CloudBase Nodejs24.11。依赖由云端安装；也可以在各部署包目录 `npm ci` 后上传包内容，入口应位于压缩包最外层。
+`index.main`（云函数执行入口）采用 CommonJS 桥接 `entry.mjs`（业务模块），兼容 CloudBase Nodejs24.11。生产依赖随部署包上传，入口应位于压缩包最外层。
 
 `cloudbaserc.json`（真实环境部署配置）已被 Git 忽略。模板不自动创建定时触发器，避免没有正确密钥时部署一个失效任务。服务器环境变量 `GUOMAN_SCAN_SECRET`（扫描调度密钥）从管理员环境读取，不能放入公开变量。
 

@@ -9,9 +9,8 @@
       "runtime": "Nodejs24.11",
       "timeout": 30,
       "memorySize": 256,
-      "installDependency": true,
+      "installDependency": false,
       "ignore": [
-        "node_modules",
         ".env*"
       ]
     },
@@ -21,9 +20,8 @@
       "runtime": "Nodejs24.11",
       "timeout": 30,
       "memorySize": 256,
-      "installDependency": true,
+      "installDependency": false,
       "ignore": [
-        "node_modules",
         ".env*"
       ]
     },
@@ -33,9 +31,8 @@
       "runtime": "Nodejs24.11",
       "timeout": 120,
       "memorySize": 256,
-      "installDependency": true,
+      "installDependency": false,
       "ignore": [
-        "node_modules",
         ".env*"
       ],
       "envVariables": {

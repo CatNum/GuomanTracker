@@ -1,8 +1,20 @@
+import { spawnSync } from 'node:child_process';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const root=new URL('../../',import.meta.url);
 const output=new URL('.cloudbase-deploy/',root);
+
+function installProductionDependencies(target,name){
+  const npmCli=process.env.npm_execpath;
+  const command=npmCli?process.execPath:'npm';
+  const args=npmCli?[npmCli]:[];
+  args.push('ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund');
+  const result=spawnSync(command,args,{cwd:fileURLToPath(target),stdio:'inherit'});
+  if(result.error)throw result.error;
+  if(result.status!==0)throw new Error(`${name} 生产依赖安装失败，退出码 ${result.status}`);
+}
+
 // Only this generated, ignored directory is replaced. Source and local credentials stay outside it.
 await rm(output,{recursive:true,force:true});
 await mkdir(output,{recursive:true});
@@ -19,6 +31,7 @@ for(const name of ['guoman-user','guoman-catalog','guoman-scan']) {
   await cp(new URL('cloudbase/shared/',root),new URL('shared/',target),{recursive:true});
   const pkg=JSON.parse(await readFile(new URL('package.json',target),'utf8'));
   if(!pkg.dependencies?.['@cloudbase/node-sdk'])throw new Error(`${name} 缺少 CloudBase Node SDK`);
+  installProductionDependencies(target,name);
   for(const file of await readdir(target))if(/\.(?:js|mjs)$/.test(file)) {
     const content=await readFile(new URL(file,target),'utf8');
     for(const match of content.matchAll(/(?:from\s*|import\s*\()\s*['"](\.\.?\/[^'"]+)['"]/g)) {
