@@ -20,5 +20,6 @@ dist/
 !.env.example
 *.pem
 .cloudbase-deploy/
+/.cloudbase/
 /guoman-site/.cloudbase-static/
 /cloudbaserc.json
